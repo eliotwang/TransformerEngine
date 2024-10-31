@@ -108,10 +108,17 @@ NVTE_Fused_Attn_Backend nvte_get_fused_attn_backend(
     int64_t window_size_right) {
   using namespace transformer_engine;
   
-  // by default, both ck and aotriton backends are enabled
-  bool nvte_fused_attn_ck = true;
-  bool nvte_fused_attn_aotriton = true;
-  
+  // by default, fused attn is enabled
+  bool nvte_fused_attn = true;
+  if (const char* env_p = std::getenv("NVTE_FUSED_ATTN") ) {
+    if (env_p != nullptr && std::string(env_p) == "0")
+      nvte_fused_attn = false;
+  }
+
+  // by default, both ck and aotriton backends are enabled by nvte_fused_attn
+  bool nvte_fused_attn_ck = nvte_fused_attn;
+  bool nvte_fused_attn_aotriton = nvte_fused_attn;
+
   if (const char* env_p = std::getenv("NVTE_FUSED_ATTN_CK") ) {
     if (env_p != nullptr && std::string(env_p) == "0")
       nvte_fused_attn_ck = false;

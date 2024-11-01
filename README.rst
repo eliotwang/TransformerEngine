@@ -220,11 +220,17 @@ If you want to check that only previously tuned algorithms are used by your appl
 Fused Attention Backends on ROCm
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Currently ROCm TE supports two backends, AOTriton and CK, for fused attention. 
-To enable specific backends, the following environment variables can be used:
+To enable specific backends in compilation and/or in runtime, the following environment variables can be used:
 
 * NVTE_FUSED_ATTN - enable the fused attention, default = 1;
 * NVTE_FUSED_ATTN_CK - enable the CK backend, default = 1;
 * NVTE_FUSED_ATTN_AOTRITON - enable the AOTriton backend, default = 1.
+
+Setting env NVTE_FUSED_ATTN_<BACKEND>=0 in compilation will skip the build of the specific backend, which saves the overall building time. 
+Setting env NVTE_FUSED_ATTN_<BACKEND>=0 in runtime provides the option to choose specific backends in runtime. 
+Note that one backend can be enabled in compilation but disabled in runtime. 
+However, if one backend is disabled in compilation, the same env NVTE_FUSED_ATTN_<BACKEND>=0 is required during runtime. 
+Otherwise TE will error out that the specific backend is not compiled. 
 
 NVTE_FUSED_ATTN has higher priority than NVTE_FUSED_ATTN_CK and NVTE_FUSED_ATTN_AOTRITON. 
 NVTE_FUSED_ATTN=0 will use the TE unfused attention even if NVTE_FUSED_ATTN_CK or NVTE_FUSED_ATTN_AOTRITON is set. 

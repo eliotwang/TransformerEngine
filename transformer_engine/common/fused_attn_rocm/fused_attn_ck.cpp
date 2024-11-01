@@ -6,7 +6,9 @@
 
 #include <iostream>
 #include <string>
+#ifdef USE_FUSED_ATTN_CK
 #include <ck_fused_attn/ck_fused_attn.hpp>
+#endif // USE_FUSED_ATTN_CK
 #include "../util/cuda_runtime.h"
 #include "../util/system.h"
 #include "fused_attn_ck.h"
@@ -29,6 +31,7 @@ bool is_ck_backend_supported(
   int64_t window_size_left, 
   int64_t window_size_right) {
 
+#ifdef USE_FUSED_ATTN_CK
   bool nvte_log_ck_config = false;
   if (const char* env_p = std::getenv("NVTE_LOG_CK_CONFIG") ) {
     if (env_p != nullptr && std::string(env_p) == "1")
@@ -130,9 +133,14 @@ bool is_ck_backend_supported(
   } 
   
   return true;
+#else
+  NVTE_ERROR("CK fused attn backend not compiled.");
+  return false;
+#endif // USE_FUSED_ATTN_CK
 }
 
 
+#ifdef USE_FUSED_ATTN_CK
 ck_fused_attn::DType nvte_to_ck_dtype(NVTEDType t_dtype){
 #define CAST_TYPE(aname, dtname) if (t_dtype == NVTEDType::aname) return ck_fused_attn::DType::dtname
   CAST_TYPE(kNVTEFloat16, kFloat16);
@@ -429,6 +437,7 @@ void fused_attn_ck_bwd_impl(
       workspace,
       stream));
 }
+#endif // USE_FUSED_ATTN_CK
 }  // namespace fused_attn_rocm
 
 using namespace transformer_engine::fused_attn_rocm;
@@ -444,6 +453,7 @@ void fused_attn_ck_fwd_qkvpacked(
   Tensor *workspace,
   cudaStream_t stream){
 
+#ifdef USE_FUSED_ATTN_CK
   const NVTEDType QKV_type = static_cast<NVTEDType>(input_QKV->data.dtype);
   void *devPtrQKV = input_QKV->data.dptr;
   // determine the stride based on qkv layout
@@ -491,6 +501,9 @@ void fused_attn_ck_fwd_qkvpacked(
   } else {
     NVTE_ERROR("Unexpected workspace_size.");
   }
+#else
+  NVTE_ERROR("CK fused attn backend not compiled.");
+#endif // USE_FUSED_ATTN_CK
 }
 
 void fused_attn_ck_bwd_qkvpacked(
@@ -506,6 +519,7 @@ void fused_attn_ck_bwd_qkvpacked(
   Tensor* workspace,
   cudaStream_t stream){
 
+#ifdef USE_FUSED_ATTN_CK
   const NVTEDType QKV_type = static_cast<NVTEDType>(input_QKV->data.dtype);
   //input tensor
   void *devPtrQKV = input_QKV->data.dptr;
@@ -558,6 +572,9 @@ void fused_attn_ck_bwd_qkvpacked(
   } else {
     NVTE_ERROR("Unexpected workspace_size.");
   }
+#else
+  NVTE_ERROR("CK fused attn backend not compiled.");
+#endif // USE_FUSED_ATTN_CK
 }
 
 void fused_attn_ck_fwd_kvpacked(
@@ -573,6 +590,7 @@ void fused_attn_ck_fwd_kvpacked(
   Tensor *workspace,
   cudaStream_t stream){
 
+#ifdef USE_FUSED_ATTN_CK
   const NVTEDType Q_type = static_cast<NVTEDType>(input_Q->data.dtype);
   const NVTEDType KV_type = static_cast<NVTEDType>(input_KV->data.dtype);
   //input tensor
@@ -620,6 +638,9 @@ void fused_attn_ck_fwd_kvpacked(
   } else {
     NVTE_ERROR("Unexpected workspace_size.");
   }
+#else
+  NVTE_ERROR("CK fused attn backend not compiled.");
+#endif // USE_FUSED_ATTN_CK
 }
 
 void fused_attn_ck_bwd_kvpacked(
@@ -635,6 +656,7 @@ void fused_attn_ck_bwd_kvpacked(
   const Tensor* input_rng_state,
   Tensor* workspace,
   cudaStream_t stream){
+#ifdef USE_FUSED_ATTN_CK
   const NVTEDType Q_type = static_cast<NVTEDType>(input_Q->data.dtype);
   const NVTEDType KV_type = static_cast<NVTEDType>(input_KV->data.dtype);
   //input tensor
@@ -686,6 +708,9 @@ void fused_attn_ck_bwd_kvpacked(
   } else {
     NVTE_ERROR("Unexpected workspace_size.");
   }
+#else
+  NVTE_ERROR("CK fused attn backend not compiled.");
+#endif // USE_FUSED_ATTN_CK
 }
 
 void fused_attn_ck_fwd(
@@ -701,6 +726,7 @@ void fused_attn_ck_fwd(
   Tensor *workspace,
   cudaStream_t stream){
 
+#ifdef USE_FUSED_ATTN_CK
   const NVTEDType Q_type = static_cast<NVTEDType>(input_Q->data.dtype);
   const NVTEDType KV_type = static_cast<NVTEDType>(input_K->data.dtype);
   //save the input rng state to Aux_CTX_Tensors
@@ -736,6 +762,9 @@ void fused_attn_ck_fwd(
   } else {
     NVTE_ERROR("Unexpected workspace_size.");
   }
+#else
+  NVTE_ERROR("CK fused attn backend not compiled.");
+#endif // USE_FUSED_ATTN_CK
 }
 
 void fused_attn_ck_bwd(
@@ -751,6 +780,7 @@ void fused_attn_ck_bwd(
   const Tensor* input_rng_state,
   Tensor* workspace,
   cudaStream_t stream){
+#ifdef USE_FUSED_ATTN_CK
   const NVTEDType Q_type = static_cast<NVTEDType>(input_Q->data.dtype);
   const NVTEDType KV_type = static_cast<NVTEDType>(input_K->data.dtype);
 
@@ -786,6 +816,9 @@ void fused_attn_ck_bwd(
   } else {
     NVTE_ERROR("Unexpected workspace_size.");
   }
+#else
+  NVTE_ERROR("CK fused attn backend not compiled.");
+#endif // USE_FUSED_ATTN_CK
 }
 
 }  // namespace transformer_engine

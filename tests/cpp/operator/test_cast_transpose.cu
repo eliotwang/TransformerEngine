@@ -9,7 +9,6 @@
 #include <iostream>
 #include <memory>
 #include <random>
-#include <ctime>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
@@ -41,53 +40,29 @@ void compute_ref(const InputType *data, OutputType *output_c, OutputType *output
 
 template <typename InputType, typename OutputType>
 void performTest(const size_t N, const size_t H) {
-
   using namespace test;
-  cudaEvent_t startEvent, stopEvent;
-  cudaEventCreate(&startEvent);
-  cudaEventCreate(&stopEvent);
 
-  //auto before_start_ = std::chrono::steady_clock::now();
   DType itype = TypeInfo<InputType>::dtype;
   DType otype = TypeInfo<OutputType>::dtype;
 
   Tensor input({ N, H }, itype);
   Tensor output_c({ N, H }, otype);
   Tensor output_t({ H, N }, otype);
-    
-  
+
   std::unique_ptr<OutputType[]> ref_output_c = std::make_unique<OutputType[]>(N * H);
   std::unique_ptr<OutputType[]> ref_output_t = std::make_unique<OutputType[]>(N * H);
 
   fillUniform(&input);
   setRandomScale(&output_c);
   output_t.shareFP8Meta(output_c);
- 
-  int warm_iter = 3;
-  for(int i = 0; i < warm_iter; i++)
-      nvte_cast_transpose(input.data(), output_c.data(), output_t.data(), 0);
-  
-  int iter = 5;
-  cudaEventRecord(startEvent, 0);
-  for(int i = 0; i < iter; i++)
-      nvte_cast_transpose(input.data(), output_c.data(), output_t.data(), 0);
-  
-  cudaEventRecord(stopEvent, 0);
-  cudaEventSynchronize(stopEvent);
 
-  float milliseconds = 0.0f;
-  cudaEventElapsedTime(&milliseconds, startEvent, stopEvent);
-
-  std::cout << "GPU execution time: " << (milliseconds / iter) * 1000 << " us" << std::endl;
+  nvte_cast_transpose(input.data(), output_c.data(), output_t.data(), 0);
 
   float ref_amax;
-  
-
-  
   compute_ref<InputType, OutputType>(input.cpu_dptr<InputType>(), ref_output_c.get(),
                                      ref_output_t.get(), N, H, &ref_amax,
                                      output_c.scale());
-  
+
   cudaDeviceSynchronize();
   auto err = cudaGetLastError();
   ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -103,15 +78,15 @@ void performTest(const size_t N, const size_t H) {
 }
 
 std::vector<std::pair<size_t, size_t>> test_cases = {{2048, 12288},
+                                                     {768, 1024},
                                                      {256, 65536},
                                                      {65536, 128},
-						                                         {768, 1024},
-						                                         {256, 256},
-                                                     //{120, 2080},
-                                                     //{8, 8},
-                                                     /*{1, 3221},       // Prime 456
+                                                     {256, 256},
+                                                     {120, 2080},
+                                                     {8, 8},
+                                                     {1, 3221},       // Prime 456
                                                      {2333, 1},       // Prime 345
-                                                     {1481, 677}*/};    // Primes 234, 123
+                                                     {1481, 677}};    // Primes 234, 123
 }  // namespace
 
 class CTTestSuite : public ::testing::TestWithParam<std::tuple<transformer_engine::DType,

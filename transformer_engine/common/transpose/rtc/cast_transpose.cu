@@ -22,39 +22,6 @@ constexpr size_t block_size = __BLOCK_SIZE__;
 
 }  // namespace
 
-__device__ OType convert_from_fp32(float v) {
-  uint8_t i8data;
-  union {
-    float fval;
-    uint32_t i32val;
-    uint8_t i8val[4];  // NOTE: not endian independent
-  } val;
-
-  uint32_t ival = 0;
-  val.fval = v;
-
-  if constexpr (std::is_same<OType, hip_f8<hip_f8_type::fp8>>::value){
-    if ((val.i32val & 0x7F800000) != 0x7F800000) {  /// propagate NAN/INF, no clipping
-      val.fval = __builtin_amdgcn_fmed3f(val.fval, 240.0, -240.0);
-    }
-    ival = __builtin_amdgcn_cvt_pk_fp8_f32(val.fval, val.fval, ival,false);  // false -> WORD0
-    val.i32val = ival;
-    i8data = val.i8val[0];
-    return OType(i8data);
-  }
-  else if constexpr (std::is_same<OType, hip_f8<hip_f8_type::bf8>>::value){
-    if ((val.i32val & 0x7F800000) != 0x7F800000) // propagate NAN/INF, no clipping
-	      val.fval = __builtin_amdgcn_fmed3f(val.fval, 57344.0, -57344.0);
-    ival = __builtin_amdgcn_cvt_pk_bf8_f32(val.fval, val.fval, ival,false);  // false -> WORD0
-    val.i32val = ival;
-    i8data = val.i8val[0];
-    return OType(i8data);
-  }
-  else 
-    return OType(v);
-}
-
-
 __global__ void __launch_bounds__(block_size) cast_transpose_optimized_kernel(
     const IType* __restrict__ const input, const CType* __restrict__ const noop,
     OType* __restrict__ const output_c, OType* __restrict__ const output_t,
@@ -116,8 +83,7 @@ __global__ void __launch_bounds__(block_size) cast_transpose_optimized_kernel(
 #pragma unroll
       for (size_t j2 = 0; j2 < nvec_in; ++j2) {
         const CType in = static_cast<CType>(local_input.data.elt[j2]);
-        //const OType out = OType(in * scale);
-        const OType out = convert_from_fp32((float)(in*scale));
+        const OType out = OType(in * scale);
         __builtin_assume(amax >= 0);
         amax = fmaxf(fabsf(in), amax);
         local_output_c.data.elt[j2] = out;
@@ -128,6 +94,7 @@ __global__ void __launch_bounds__(block_size) cast_transpose_optimized_kernel(
   }
 
   // Copy from registers to shared memory to global memory
+  //__shared__ OVecT shared_output_t[THREADS_PER_WARP][THREADS_PER_WARP + 1];
   __shared__ OVecT shared_output_t[THREADS_PER_WARP][warps_per_tile*iter_size + 1];
 #pragma unroll
   for (size_t j2 = 0; j2 < nvec_in; ++j2) {

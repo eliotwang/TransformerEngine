@@ -309,7 +309,7 @@ def get_frameworks() -> List[str]:
         if "jax" in _frameworks:
             if not any(re.match(r'jax-rocm\d+-plugin', d.metadata['Name']) for d in importlib.metadata.distributions()):
                 try:
-                    import jaxlib.rocm
+                    import jaxlib.rocm #pre JAX 0.4.30 way
                 except ImportError:
                     if "jax" in _requested_frameworks:
                         _unsupported_frameworks.append("jax")

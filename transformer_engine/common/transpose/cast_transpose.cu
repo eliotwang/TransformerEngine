@@ -231,7 +231,7 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
     NVTE_CHECK(noop.data.dtype == DType::kFloat32);
     NVTE_CHECK(noop.data.dptr != nullptr);
   }
-
+  
   // Check tensor dims
   CheckInputTensor(input, "cast_transpose_input");
   CheckOutputTensor(cast_output, "cast_output");
@@ -257,7 +257,7 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
              "Cast and transposed outputs need to share amax tensor.");
   NVTE_CHECK(cast_output.scale.dptr == transposed_output.scale.dptr,
              "Cast and transposed outputs need to share scale tensor.");
-
+  
   TRANSFORMER_ENGINE_TYPE_SWITCH_INPUT(
       input.data.dtype, InputType,
       TRANSFORMER_ENGINE_TYPE_SWITCH_OUTPUT(
@@ -277,8 +277,11 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
             size_t iter_size;
             int num_blocks;
             size_t rtc_block_size;
-#ifdef __HIP_PLATFORM_AMD__
+
+            bool do_general_config = true;
+#ifdef __HIP_PLATFORM_AMD__            
             if((std::is_same<OutputType, fp8e5m2>::value) || (std::is_same<OutputType, fp8e4m3>::value)){
+              do_general_config = false;
                // Estimate number of SMs
               // Note: H100 has 132 SMs, A100 has 108 SMs.
               // Note: Directly querying number of SMs with cudaGetDeviceProperties is
@@ -321,10 +324,13 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
             const size_t col_tile_elements = store_size * iter_size * wpt_size / otype_size;
             // Number of CUDA blocks
             num_blocks = (row_length / row_tile_elements) * (num_rows / col_tile_elements);
-            rtc_block_size = THREADS_PER_WARP * wpt_size;
-            }else
-#endif
-            {
+            rtc_block_size = THREADS_PER_WARP * wpt_size;  
+
+            do_general_config =!(row_length % row_tile_elements == 0 && num_rows % col_tile_elements == 0);
+ 
+          }
+#endif         
+            if(do_general_config){
               // Pick kernel config
               std::vector<KernelConfig> kernel_configs;
               kernel_configs.reserve(16);
@@ -366,7 +372,7 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
                 "cast_transpose"
                 ",itype=",
                 itype_name, ",otype=", otype_name, ",load_size=", load_size,
-                ",store_size=", store_size, "wpt_size=", wpt_size, "iter_size=",iter_size);
+                ",store_size=", store_size, ",wpt_size=", wpt_size, ",iter_size=",iter_size);
             if (!rtc_manager.is_compiled(kernel_label)) {
               std::string code = string_code_transpose_rtc_cast_transpose_cu;
               code = regex_replace(code, "__ITYPE__", itype_name);
@@ -387,7 +393,7 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
                             static_cast<OutputType *>(transposed_output.data.dptr),
                             static_cast<const CType *>(cast_output.scale.dptr),
                             static_cast<CType *>(cast_output.amax.dptr), row_length, num_rows);
-            
+
           } else {  // Statically-compiled general kernel
             constexpr size_t load_size = 4;
             constexpr size_t store_size = 4;

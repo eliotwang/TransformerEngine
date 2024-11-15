@@ -168,9 +168,9 @@ void fused_attn_aotriton_fwd_impl(
   //devPtrDropoutSeed and devPtrDropoutOffset are actually device ptrs
   uint64_t philox_seed, philox_offset;
   if(is_training && dropout_probability > 0.f){
-    cudaStreamSynchronize(stream);
-    cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    (void)cudaStreamSynchronize(stream);
+    (void)cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    (void)cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
   }
 
   bool nvte_log_aotriton_config = false;
@@ -275,9 +275,9 @@ void fused_attn_aotriton_bwd_impl(
 
   uint64_t philox_seed, philox_offset;
   if(dropout_probability > 0.f){
-    cudaStreamSynchronize(stream);
-    cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    (void)cudaStreamSynchronize(stream);
+    (void)cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    (void)cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
   }
 
   bool nvte_log_aotriton_config = false;

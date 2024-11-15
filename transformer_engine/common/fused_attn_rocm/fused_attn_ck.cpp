@@ -219,9 +219,9 @@ void fused_attn_ck_fwd_impl(
   uint64_t philox_seed, philox_offset;
   //skip this synchronization if dropout is not needed
   if(is_training && dropout_probability > 0.f){
-    cudaStreamSynchronize(stream);
-    cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    (void)cudaStreamSynchronize(stream);
+    (void)cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    (void)cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
   }
 
   bool nvte_log_ck_config = false;
@@ -318,10 +318,10 @@ void fused_attn_ck_bwd_impl(
   NVTE_QKV_Layout_Group layout_group = nvte_get_qkv_layout_group(layout);
   if((layout_group == NVTE_QKV_Layout_Group::NVTE_3HD) or (layout_group == NVTE_QKV_Layout_Group::NVTE_H3D)){
     // just memset all dq, dk, dv
-    cudaMemsetAsync(devPtrdQ, 0, ck_dtype_size(dtype)*b*h*s_q*d*3, stream);
+    (void)cudaMemsetAsync(devPtrdQ, 0, ck_dtype_size(dtype)*b*h*s_q*d*3, stream);
   }else{
     // HD_2HD, HD_H2D, HD_HD_HD can just memset dq itself
-    cudaMemsetAsync(devPtrdQ, 0, ck_dtype_size(dtype)*b*h*s_q*d, stream);
+    (void)cudaMemsetAsync(devPtrdQ, 0, ck_dtype_size(dtype)*b*h*s_q*d, stream);
   }
   std::array<uint64_t, 4> q_stride;
   std::array<uint64_t, 4> k_stride;
@@ -344,9 +344,9 @@ void fused_attn_ck_bwd_impl(
   
   uint64_t philox_seed, philox_offset;
   if(dropout_probability > 0.f){
-    cudaStreamSynchronize(stream);
-    cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    (void)cudaStreamSynchronize(stream);
+    (void)cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    (void)cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
   }
   // First b*h*sq*sizeof(float) in workspace are for lse
   // The remaining are for dq_acc_ptr

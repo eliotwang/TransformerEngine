@@ -1,3 +1,5 @@
+# This file was modified for portability to AMDGPU
+# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
 # Copyright (c) 2022-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
@@ -32,6 +34,7 @@ from transformer_engine.jax.cpp_extensions import FusedAttnHelper
 from transformer_engine.transformer_engine_jax import NVTE_Fused_Attn_Backend
 
 from utils import assert_allclose
+from transformer_engine.jax import is_hip_extension
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -301,7 +304,7 @@ class FusedAttnRunner:
                     "B1SS, BHSS and 11SS bias shapes are only supported for "
                     "AttnMaskType.NO_MASK and AttnMaskType.CAUSAL_MASK."
                 )
-            elif self.backend != NVTE_Fused_Attn_Backend.NVTE_F16_arbitrary_seqlen:
+            elif (not is_hip_extension()) and self.backend != NVTE_Fused_Attn_Backend.NVTE_F16_arbitrary_seqlen:
                 pytest.skip(
                     "B1SS, BHSS and 11SS bias shapes are only supported for "
                     "the F16_arbitrary_seqlen backend."
@@ -571,7 +574,7 @@ class FusedAttnRunner:
 
             # Assume all batch has the same actual_seqlen, probably needs to extend the tests
             bias_mask = self.mask[0, 0]
-
+            
             # Assert all masked dbias are 0s
             assert_allclose(
                 jnp.where(bias_mask, primitive_dbias, 0),

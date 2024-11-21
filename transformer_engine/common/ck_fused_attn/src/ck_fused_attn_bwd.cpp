@@ -13,6 +13,7 @@
 #include "bias.hpp"
 #include "mask.hpp"
 #include "fmha_bwd.hpp"
+#include "ck_fused_attn_utils.hpp"
 
 namespace ck_fused_attn{
 
@@ -65,6 +66,96 @@ __global__ void dk_dv_reduce(
   }
 }
 
+// define dbias_reduce functions only for fp16 and bf16 types
+template<typename DataType>
+__global__ void dbias_reduce_11ss(
+  uint64_t b, uint64_t h, uint64_t s_q, uint64_t s_kv,
+  const DataType *dbias_expanded,
+  DataType *dbias){
+  
+  const uint64_t stride_h = s_q*s_kv;
+  const uint64_t stride_b = h*s_q*s_kv;
+  for(uint64_t ss_idx = blockIdx.x*blockDim.x + threadIdx.x; ss_idx < s_q*s_kv; ss_idx += blockDim.x * gridDim.x){
+    //sum over b, h dims both
+    float sum_dbias = 0.0f;
+    for(uint64_t b_idx = 0; b_idx< b; b_idx++){
+      for(uint64_t h_idx = 0; h_idx < h; h_idx++){
+        if constexpr (std::is_same_v<DataType, ck_tile::bf16_t>){
+          // bf16 requires special casting in CK
+          sum_dbias += ck_tile::bf16_to_float(dbias_expanded[b_idx*stride_b + h_idx*stride_h+ss_idx]);
+        }else{
+          sum_dbias += dbias_expanded[b_idx*stride_b + h_idx*stride_h+ss_idx];
+        }
+      }
+    }
+    if constexpr (std::is_same_v<DataType, ck_tile::bf16_t>){
+      dbias[ss_idx] = ck_tile::float_to_bf16(sum_dbias);
+    }else{
+      dbias[ss_idx] = sum_dbias;
+    }
+  }
+}
+
+// define dbias_reduce functions only for fp16 and bf16 types
+template<typename DataType>
+__global__ void dbias_reduce_1hss(
+  uint64_t b, uint64_t h, uint64_t s_q, uint64_t s_kv,
+  const DataType *dbias_expanded,
+  DataType *dbias){
+  
+  const uint64_t stride_h = s_q*s_kv;
+  const uint64_t stride_b = h*s_q*s_kv;
+  for(uint64_t ss_idx = blockIdx.x*blockDim.x + threadIdx.x; ss_idx < s_q*s_kv; ss_idx += blockDim.x * gridDim.x){
+    for(uint64_t h_idx = 0; h_idx < h; h_idx++){
+      //sum over b dims only
+      float sum_dbias = 0.0f;
+      for(uint64_t b_idx = 0; b_idx< b; b_idx++){
+        if constexpr (std::is_same_v<DataType, ck_tile::bf16_t>){
+          // bf16 requires special casting in CK
+          sum_dbias += ck_tile::bf16_to_float(dbias_expanded[b_idx*stride_b + h_idx*stride_h+ss_idx]);
+        }else{
+          sum_dbias += dbias_expanded[b_idx*stride_b + h_idx*stride_h+ss_idx];
+        }
+      }
+      if constexpr (std::is_same_v<DataType, ck_tile::bf16_t>){
+        dbias[ss_idx + h_idx*stride_h] = ck_tile::float_to_bf16(sum_dbias);
+      }else{
+        dbias[ss_idx + h_idx*stride_h] = sum_dbias;
+      }
+    }
+  }
+}
+
+// define dbias_reduce functions only for fp16 and bf16 types
+template<typename DataType>
+__global__ void dbias_reduce_b1ss(
+  uint64_t b, uint64_t h, uint64_t s_q, uint64_t s_kv,
+  const DataType *dbias_expanded,
+  DataType *dbias){
+  
+  const uint64_t stride_h = s_q*s_kv;
+  const uint64_t stride_b = h*s_q*s_kv;
+  for(uint64_t ss_idx = blockIdx.x*blockDim.x + threadIdx.x; ss_idx < s_q*s_kv; ss_idx += blockDim.x * gridDim.x){
+    for(uint64_t b_idx = 0; b_idx< b; b_idx++){
+      //sum over h dims only
+      float sum_dbias = 0.0f;
+      for(uint64_t h_idx = 0; h_idx < h; h_idx++){
+        if constexpr (std::is_same_v<DataType, ck_tile::bf16_t>){
+          // bf16 requires special casting in CK
+          sum_dbias += ck_tile::bf16_to_float(dbias_expanded[b_idx*stride_b + h_idx*stride_h+ss_idx]);
+        }else{
+          sum_dbias += dbias_expanded[b_idx*stride_b + h_idx*stride_h+ss_idx];
+        }
+      }
+      if constexpr (std::is_same_v<DataType, ck_tile::bf16_t>){
+        dbias[ss_idx + b_idx*stride_h] = ck_tile::float_to_bf16(sum_dbias);
+      }else{
+        dbias[ss_idx + b_idx*stride_h] = sum_dbias;
+      }
+    }
+  }
+}
+
 #define CK_FUSED_ATTN_TYPE_SWITCH_16BIT(dtype, type, ...)   \
 switch (dtype) {                                            \
   case DType::kFloat16: {                                   \
@@ -83,13 +174,15 @@ switch (dtype) {                                            \
 
 hipError_t ck_attn_bwd(  
   DType dtype,
-  uint64_t b, uint64_t h, uint64_t hg, uint64_t s_q, uint64_t s_kv, uint64_t d,
+  uint64_t b, uint64_t h, uint64_t hg, uint64_t s_q, uint64_t s_kv, uint64_t d, uint64_t bias_b, uint64_t bias_h,
   const void* q_ptr, 
   uint64_t stride_b_q, uint64_t stride_h_q, uint64_t stride_s_q,
   const void* k_ptr, 
   uint64_t stride_b_k, uint64_t stride_h_k, uint64_t stride_s_k,
   const void* v_ptr, 
   uint64_t stride_b_v, uint64_t stride_h_v, uint64_t stride_s_v,
+  const void* bias_ptr,
+  const void* alibi_slope_ptr,
   const void* o_ptr, 
   uint64_t stride_b_o, uint64_t stride_h_o, uint64_t stride_s_o,
   const void* lse_ptr, 
@@ -97,6 +190,7 @@ hipError_t ck_attn_bwd(
   uint64_t stride_b_do, uint64_t stride_h_do, uint64_t stride_s_do,
   float scaling_factor, float dropout_probability,
   uint64_t philox_seed, uint64_t philox_offset,
+  BiasType attn_bias_type,
   MaskType attn_mask_type,
   int64_t window_size_left, int64_t window_size_right,
   void* dq_ptr, 
@@ -109,11 +203,13 @@ hipError_t ck_attn_bwd(
   uint64_t stride_b_dk, uint64_t stride_h_dk, uint64_t stride_s_dk,
   void* dv_ptr, 
   uint64_t stride_b_dv, uint64_t stride_h_dv, uint64_t stride_s_dv,
+  void* dbias_expanded_ptr,
+  void* dbias_ptr,
   void* workspace_ptr,
   hipStream_t stream){
 
   bool has_dropout = (dropout_probability > 0.f);
-  bool has_dbias = false;
+  bool has_dbias = dbias_ptr!=nullptr;
   bool is_mqa_gqa = (h > hg);
 
   /* CK input parameters */
@@ -133,11 +229,22 @@ hipError_t ck_attn_bwd(
   bool s_randval = false;
   bool is_deterministic = false;
 
-  bias_enum bias_type = bias_enum::no_bias;
-  mask_enum mask_type;
-  int32_t left, right;
-  ck_tile::stream_config stream_config{stream};
+  bias_enum bias_type;
+  BiasShape bias_shape; 
+  if (attn_bias_type==BiasType::no_bias){
+    bias_type = bias_enum::no_bias;
+  }else if (attn_bias_type==BiasType::elementwise_bias){
+    bias_type = bias_enum::elementwise_bias;
+    bias_shape = get_bias_shape(b, h, bias_b, bias_h);
+  }else if (attn_bias_type==BiasType::alibi){
+    bias_type = bias_enum::alibi;
+  }else{
+    //TODO: better error out system
+    throw std::runtime_error("Invalid bias_type in ck_fused_attn.");
+  }
 
+  mask_enum mask_type;
+  ck_tile::index_t left, right;
   if (attn_mask_type == MaskType::no_mask){
     mask_type = mask_enum::no_mask;
   }else if(attn_mask_type == MaskType::mask_top_left){
@@ -149,6 +256,8 @@ hipError_t ck_attn_bwd(
   }
   left = window_size_left;
   right = window_size_right;
+
+  ck_tile::stream_config stream_config{stream};
 
   ck_tile::index_t shape_seqlen_q = seqlen_q;
   ck_tile::index_t shape_seqlen_k = seqlen_k;
@@ -172,8 +281,8 @@ hipError_t ck_attn_bwd(
     const ck_tile::index_t stride_q = stride_s_q;
     const ck_tile::index_t stride_k = stride_s_k;
     const ck_tile::index_t stride_v = stride_s_v;
-    // TODO: support bias later
-    const ck_tile::index_t stride_bias = 0;
+    // bias of shape (bias_b, bias_h, s_q, s_kv)
+    const ck_tile::index_t stride_bias = max_seqlen_k;
     const ck_tile::index_t stride_o = stride_s_o;
     const ck_tile::index_t stride_randval = max_seqlen_k;
     const ck_tile::index_t stride_do = stride_s_do;
@@ -182,31 +291,34 @@ hipError_t ck_attn_bwd(
     const ck_tile::index_t stride_dv = stride_s_dv;
     const ck_tile::index_t stride_dkv_expanded = stride_s_dkv_expanded;
     const ck_tile::index_t stride_dq_acc = h*d; //dq_acc of shape (B, S, H, D)
-    // TODO: support bias later
-    const ck_tile::index_t stride_dbias = 0;
+    // dbias is of the same shape as bias
+    // but ck only take dbias with BHSS
+    const ck_tile::index_t stride_dbias = max_seqlen_k;
     // setup nhead_stride_* arguments
     const ck_tile::index_t nhead_stride_q = stride_h_q;
     const ck_tile::index_t nhead_stride_k = stride_h_k;
     const ck_tile::index_t nhead_stride_v = stride_h_v;
-    // TODO: support bias later
-    const ck_tile::index_t nhead_stride_bias = 0;
+    // bias input can be of different shapes (11SS, 1HSS, B1SS, and BHSS), but dbias must be of BHSS
+    const ck_tile::index_t nhead_stride_bias = (bias_shape==BiasShape::k1HSS || bias_shape==BiasShape::kBHSS) ? max_seqlen_q * max_seqlen_k: 0;
     const ck_tile::index_t nhead_stride_o = stride_h_o;
     const ck_tile::index_t nhead_stride_randval =
         shape_seqlen_q * max_seqlen_k;
     const ck_tile::index_t nhead_stride_do = stride_h_do;
-    // TODO: buffer?
     const ck_tile::index_t nhead_stride_lsed = max_seqlen_q;
     const ck_tile::index_t nhead_stride_dq = stride_h_dq;
     const ck_tile::index_t nhead_stride_dk = stride_h_dk;
     const ck_tile::index_t nhead_stride_dv = stride_h_dv;
     const ck_tile::index_t nhead_stride_dkv_expanded = stride_h_dkv_expanded;
-    const ck_tile::index_t nhead_stride_dbias = max_seqlen_k;
+    // dbias can only be of BHSS
+    const ck_tile::index_t nhead_stride_dbias = max_seqlen_q * max_seqlen_k;
     const ck_tile::index_t nhead_stride_dq_acc = d; //dq_acc of shape (B, S, H, D)
     // setup batch_stride_* arguments
     const ck_tile::index_t batch_stride_q = stride_b_q;
     const ck_tile::index_t batch_stride_k = stride_b_k;
     const ck_tile::index_t batch_stride_v = stride_b_v;
-    const ck_tile::index_t batch_stride_bias = 0;
+    // bias input can be of different shapes (11SS, 1HSS, B1SS, and BHSS), but dbias must be of BHSS
+    // for B1SS and BHSS, batch stride for bias are both bias_h x s_q x s_kv (bias_h==1 for B1SS and bias_h == h for BHSS)
+    const ck_tile::index_t batch_stride_bias = (bias_shape==BiasShape::k11SS || bias_shape==BiasShape::k1HSS) ? 0: bias_h* max_seqlen_q * max_seqlen_k;
     const ck_tile::index_t batch_stride_o = stride_b_o;
     const ck_tile::index_t batch_stride_randval =
         nhead * shape_seqlen_q * max_seqlen_k;
@@ -216,15 +328,15 @@ hipError_t ck_attn_bwd(
     const ck_tile::index_t batch_stride_dk = stride_b_dk;
     const ck_tile::index_t batch_stride_dv = stride_b_dv;
     const ck_tile::index_t batch_stride_dkv_expanded = stride_b_dkv_expanded;
-    const ck_tile::index_t batch_stride_dbias =
-        nhead * shape_seqlen_q * max_seqlen_k;
+    // for dbias, use h since h can be different from bias_h
+    const ck_tile::index_t batch_stride_dbias = h* max_seqlen_q * max_seqlen_k;
     const ck_tile::index_t batch_stride_dq_acc = h*s_q*d; //dq_acc of shape (B, S, H, D)
     const ck_tile::index_t split_stride_dq_acc = b * h * s_q * d;
 
     return fmha_bwd_args{q_ptr,
                          k_ptr,
                          v_ptr,
-                         nullptr,
+                         bias_type==bias_enum::no_bias? nullptr : (bias_type==bias_enum::alibi? alibi_slope_ptr :bias_ptr),
                          o_ptr,
                          lse_ptr,
                          do_ptr,
@@ -233,7 +345,7 @@ hipError_t ck_attn_bwd(
                          dq_ptr,
                          is_mqa_gqa? dk_expanded_ptr:dk_ptr,
                          is_mqa_gqa? dv_expanded_ptr:dv_ptr,
-                         nullptr, // dbias_ptr
+                         has_dbias? (bias_shape==BiasShape::kBHSS ? dbias_ptr: dbias_expanded_ptr): nullptr,
                          dq_acc_ptr, //dq_acc_buf
                          nullptr,//cu_seqlen_q
                          nullptr,//cu_seqlen_kv
@@ -251,7 +363,7 @@ hipError_t ck_attn_bwd(
                          stride_q,
                          stride_k,
                          stride_v,
-                         stride_bias,
+                         bias_type==bias_enum::alibi? 0: stride_bias,
                          stride_o,
                          stride_randval,
                          stride_do,
@@ -420,6 +532,50 @@ hipError_t ck_attn_bwd(
         static_cast<CK_TILE_TYPE*>(dk_ptr),
         static_cast<CK_TILE_TYPE*>(dv_ptr),
         stride_b_dk, stride_h_dk, stride_s_dk););
+  }
+  if(has_dbias && bias_shape!=BiasShape::kBHSS){
+    // reduction kernels required for 11SS, 1HSS, and B1SS
+    assert(dbias_ptr!=dbias_expanded_ptr);
+    constexpr int THREADS_PER_BLOCK = 1024;
+    dim3 block(THREADS_PER_BLOCK);
+    dim3 grid(ceil(1.0 * s_q * s_kv/THREADS_PER_BLOCK));
+    if(bias_shape==BiasShape::k11SS){
+      if (ck_fused_attn_log_config){
+        std::cout<<std::endl<<"run dbias_reduce_11SS: "<<std::endl;
+        std::cout<<"dbias_ptr: "<<dbias_ptr<<std::endl;
+        std::cout<<"dbias_expanded_ptr: "<<dbias_expanded_ptr<<std::endl;
+      }
+      CK_FUSED_ATTN_TYPE_SWITCH_16BIT(dtype, CK_TILE_TYPE,
+        hipLaunchKernelGGL(
+          dbias_reduce_11ss<CK_TILE_TYPE>, grid, block, 0, stream,
+          b, h, s_q, s_kv,
+          static_cast<CK_TILE_TYPE*>(dbias_expanded_ptr),
+          static_cast<CK_TILE_TYPE*>(dbias_ptr));); 
+    }else if(bias_shape==BiasShape::k1HSS){
+      if (ck_fused_attn_log_config){
+        std::cout<<std::endl<<"run dbias_reduce_1HSS: "<<std::endl;
+        std::cout<<"dbias_ptr: "<<dbias_ptr<<std::endl;
+        std::cout<<"dbias_expanded_ptr: "<<dbias_expanded_ptr<<std::endl;
+      }
+      CK_FUSED_ATTN_TYPE_SWITCH_16BIT(dtype, CK_TILE_TYPE,
+        hipLaunchKernelGGL(
+          dbias_reduce_1hss<CK_TILE_TYPE>, grid, block, 0, stream,
+          b, h, s_q, s_kv,
+          static_cast<CK_TILE_TYPE*>(dbias_expanded_ptr),
+          static_cast<CK_TILE_TYPE*>(dbias_ptr));); 
+    }else if(bias_shape==BiasShape::kB1SS){
+      if (ck_fused_attn_log_config){
+        std::cout<<std::endl<<"run dbias_reduce_B1SS: "<<std::endl;
+        std::cout<<"dbias_ptr: "<<dbias_ptr<<std::endl;
+        std::cout<<"dbias_expanded_ptr: "<<dbias_expanded_ptr<<std::endl;
+      }
+      CK_FUSED_ATTN_TYPE_SWITCH_16BIT(dtype, CK_TILE_TYPE,
+        hipLaunchKernelGGL(
+          dbias_reduce_b1ss<CK_TILE_TYPE>, grid, block, 0, stream,
+          b, h, s_q, s_kv,
+          static_cast<CK_TILE_TYPE*>(dbias_expanded_ptr),
+          static_cast<CK_TILE_TYPE*>(dbias_ptr));); 
+    }
   }
   return hipSuccess;
 }

@@ -48,44 +48,35 @@ def setup_jax_extension(
     ] + all_files_in_dir(extensions_dir, ".cpp")
 
     # Header files
-<<<<<<< HEAD
     if rocm_build():
-       include_dirs = []
+        include_dirs = []
     else:
         cuda_home, _ = cuda_path()
         include_dirs = [cuda_home / "include"]
-    include_dirs.extend([
-=======
-    cuda_home, _ = cuda_path()
+
     xla_home = xla_path()
-    include_dirs = [
-        cuda_home / "include",
->>>>>>> upstream/release_v1.11
+    include_dirs.extend([
         common_header_files,
         common_header_files / "common",
         common_header_files / "common" / "include",
         csrc_header_files,
-<<<<<<< HEAD
+        xla_home,
     ])
 
     if rocm_build():
         current_file_path = Path(__file__).parent.resolve()
         base_dir = current_file_path.parent
         sources = hipify(base_dir, csrc_source_files, sources, include_dirs)
-=======
-        xla_home,
-    ]
->>>>>>> upstream/release_v1.11
 
     # Compile flags
     cxx_flags = ["-O3"]
     nvcc_flags = ["-O3"]
 
     if rocm_build():
-       # Pybind11 extension does not know about HIP so specify necessary parameters here
-       rocm_home, _ = rocm_path()
-       macros=[("USE_ROCM",None)]
-       cxx_flags.extend(["-D__HIP_PLATFORM_AMD__", "-I{}/include".format(str(rocm_home))])
+        # Pybind11 extension does not know about HIP so specify necessary parameters here
+        rocm_home, _ = rocm_path()
+        macros=[("USE_ROCM",None)]
+        cxx_flags.extend(["-D__HIP_PLATFORM_AMD__", "-I{}/include".format(str(rocm_home))])
     else:
         macros=[]
 

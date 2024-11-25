@@ -1,5 +1,3 @@
-# This file was modified for portability to AMDGPU
-# Copyright (c) 2022-2024, Advanced Micro Devices, Inc. All rights reserved.
 # Copyright (c) 2022-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
@@ -56,7 +54,7 @@ layers_atomic_ring_exchange = []
 def get_cublas_workspace_size_bytes() -> None:
     """Return 32 MiB if using hopper, 4 MiB for all other architectures."""
     if torch.cuda.get_device_properties(torch.cuda.current_device()).major >= 9:
-        return 536_870_912
+        return 33_554_432
     return 4_194_304
 
 
@@ -109,11 +107,7 @@ def initialize_ub(
         world_size = torch.distributed.get_world_size(mpi_group)
         local_rank = world_rank % tp_size
         local_size = tp_size
-<<<<<<< HEAD
-        node_id = world_rank // tp_size
-=======
         self_node_idx = world_rank // tp_size
->>>>>>> upstream/release_v1.11
         num_nodes = world_size // tp_size
         ub_callbacks = tex.UbufBootstrapCallbacks()
     else:
@@ -133,16 +127,6 @@ def initialize_ub(
         world_rank = torch.distributed.get_rank(world_group)
         world_size = torch.distributed.get_world_size(world_group)
 
-<<<<<<< HEAD
-        if world_rank == 0:
-            print(
-                f'!!! [NVTE] Bootstrapping Userbuffers with backend="{bootstrap_backend}"\n',
-                end="",
-                flush=True,
-            )
-
-=======
->>>>>>> upstream/release_v1.11
         # Construct an intra-node communicator based on global ranks that share the same hostname
         # NOTE: If the user specified a valid network interface for NCCL or GLOO, use the host
         #       address on that interface instead of the hostname. This can help avoid issues when
@@ -154,25 +138,6 @@ def initialize_ub(
         )
 
         if ifname is not None:
-<<<<<<< HEAD
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                hostname = socket.inet_ntoa(
-                    fcntl.ioctl(
-                        s.fileno(), 0x8915, struct.pack("256s", ifname[:15].encode("UTF-8"))
-                    )[20:24]
-                )
-            except OSError as err:
-                raise OSError(f"Invalid network interface: {ifname}") from err
-
-        hostnames = [None for _ in range(world_size)]
-        torch.distributed.all_gather_object(hostnames, hostname, world_group)
-        intra_node_ranks = []
-        for i, host in enumerate(hostnames):
-            if host == hostname:
-                intra_node_ranks.append(i)
-        if len(intra_node_ranks) == world_size:
-=======
             # Make sure the ifname found in the environment is a valid network interface
             if ifname in [name for _, name in socket.if_nameindex()]:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -224,33 +189,16 @@ def initialize_ub(
 
         else:
             self_node_idx = 0
->>>>>>> upstream/release_v1.11
             intra_node_group = world_group
             local_rank = world_rank
             local_size = world_size
             intra_node_ranks = list(range(world_size))
-<<<<<<< HEAD
-        else:
-            intra_node_group = torch.distributed.new_group(
-                backend=bootstrap_backend, ranks=intra_node_ranks
-            )
-            local_rank = torch.distributed.get_rank(intra_node_group)
-            local_size = torch.distributed.get_world_size(intra_node_group)
-
-        node_id = world_rank // local_size
-        num_nodes = world_size // local_size
-        if local_rank == 0:
-            print(
-                f"!!! [NVTE] Number of physical nodes: {num_nodes}\n"
-                + f"!!! [NVTE] Global ranks on node {node_id}: {intra_node_ranks}\n",
-=======
 
         if world_rank == 0:
             print(f"!!! [UB] Number of physical nodes: {num_nodes}\n", end="", flush=True)
         if local_rank == 0:
             print(
                 f"!!! [UB] Global ranks on node {self_node_idx}: {intra_node_ranks}\n",
->>>>>>> upstream/release_v1.11
                 end="",
                 flush=True,
             )
@@ -365,11 +313,7 @@ def initialize_ub(
                 world_size,  # World size
                 local_rank,  # Rank within the node
                 local_size,  # Number of ranks/GPUs per node
-<<<<<<< HEAD
-                node_id,  # Node ID
-=======
                 self_node_idx,  # Node ID
->>>>>>> upstream/release_v1.11
                 num_nodes,  # Number of nodes
                 tp_size,  # Tensor-parallel group size (may be different than local_size)
                 num_sm,  # Number of communication SMs
@@ -389,11 +333,7 @@ def initialize_ub(
                 world_size,  # World size
                 local_rank,  # Rank within the node
                 local_size,  # Number of ranks/GPUs per node
-<<<<<<< HEAD
-                node_id,  # Node ID
-=======
                 self_node_idx,  # Node ID
->>>>>>> upstream/release_v1.11
                 num_nodes,  # Number of nodes
                 tp_size,  # Tensor-parallel group size (may be different than local_size)
                 num_sm,  # Number of communication SMs
@@ -414,13 +354,9 @@ def initialize_ub(
                 layers_reduce_scatter_overlap.remove(wgrad_name)
                 layers_all_gather_overlap.remove(name)
                 layers_reduce_scatter_overlap.append(name)
-<<<<<<< HEAD
-                methods["pipeline"].append(name)
-=======
                 methods["bulk"].remove(name)
                 new_method = ub_cfgs[name]["method"]
                 methods[new_method].append(name)
->>>>>>> upstream/release_v1.11
 
     for name in methods["ring_exchange"] + methods["pipeline"] + methods["bulk"]:
         ub_cfg = get_default_config(name)

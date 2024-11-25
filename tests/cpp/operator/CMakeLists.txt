@@ -4,7 +4,6 @@
 #
 # See LICENSE for license information.
 
-<<<<<<< HEAD
 list(APPEND test_cuda_sources
             test_qdq.cu
             test_cast_transpose.cu
@@ -13,10 +12,10 @@ list(APPEND test_cuda_sources
             test_cast_transpose_dbias_dgelu.cu
             test_cast_transpose_dgeglu.cu
             test_act.cu
-            test_dgeglu.cu
             test_layernorm.cu
             test_rmsnorm.cu
             test_multi_cast_transpose.cu
+            test_multi_padding.cu
             test_causal_softmax.cu
             ../test_common.cu)
 if(USE_ROCM)
@@ -30,24 +29,6 @@ else()
   message("${message_line}")
   message(STATUS "CMAKE_CURRENT_SOURCE_DIR: ${CMAKE_CURRENT_SOURCE_DIR}")
   message(STATUS "PROJECT_SOURCE_DIR: ${PROJECT_SOURCE_DIR}")
-=======
-add_executable(test_operator
-               test_qdq.cu
-               test_cast_transpose.cu
-               test_transpose.cu
-               test_cast_transpose_dbias.cu
-               test_cast_transpose_dbias_dgelu.cu
-               test_cast_transpose_dgeglu.cu
-               test_act.cu
-               test_layernorm.cu
-               test_rmsnorm.cu
-               test_multi_cast_transpose.cu
-               test_multi_padding.cu
-               test_causal_softmax.cu
-               ../test_common.cu)
-
-list(APPEND test_operator_LINKER_LIBS CUDA::cudart GTest::gtest_main ${TE_LIB} CUDA::nvrtc CUDNN::cudnn)
->>>>>>> upstream/release_v1.11
 
   set(TE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
   set(THIRDPARTY ${TE}/3rdparty)
@@ -83,4 +64,4 @@ else()
 endif()
 
 include(GoogleTest)
-gtest_discover_tests(test_operator)
+gtest_discover_tests(test_operator PROPERTIES DISCOVERY_TIMEOUT 600)

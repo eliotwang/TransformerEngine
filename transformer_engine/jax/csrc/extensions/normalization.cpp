@@ -3,10 +3,6 @@
  *
  * See LICENSE for license information.
  ************************************************************************/
-<<<<<<< HEAD
-
-=======
->>>>>>> upstream/release_v1.11
 #include "extensions.h"
 #include "transformer_engine/layer_norm.h"
 #include "transformer_engine/rmsnorm.h"

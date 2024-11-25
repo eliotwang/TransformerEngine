@@ -1,24 +1,19 @@
+# This file was modified for portability to AMDGPU
+# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
 # Copyright (c) 2022-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
 
 """Python interface for transpose extensions"""
-<<<<<<< HEAD
-from typing import Optional, Tuple, Union
-import os
-=======
 from typing import List, Optional, Tuple, Union
+import os
 
->>>>>>> upstream/release_v1.11
 import torch
 
 import transformer_engine_torch as tex
 from ..constants import TE_DType
-<<<<<<< HEAD
 from ..cast_transpose_triton import te_cast_transpose_noop_triton, te_cast_transpose_dbias_triton
-=======
 from ._common import canonicalize_fp8_scales, empty_tensor
->>>>>>> upstream/release_v1.11
 
 
 __all__ = [
@@ -65,45 +60,29 @@ def fp8_cast_transpose_fused(
 
     # Launch kernel if needed
     if inp.nelement() > 0:
-<<<<<<< HEAD
         use_cast_transpose_triton = bool( int(os.environ.get('NVTE_USE_CAST_TRANSPOSE_TRITON', '0')) )
         if use_cast_transpose_triton:
             te_cast_transpose_noop_triton(
                 inp,
                 noop_flag,
-                fp8_meta_tensor.scale[fp8_tensor],
+                fp8_scales["scale"][fp8_scales_offsets['scale_offset']],
                 cast_out,
                 transpose_out,
-                fp8_meta_tensor.amax_history[0][fp8_tensor],
+                fp8_scales["amax"][0][fp8_scales_offsets['amax_offset']],
                 otype,
             )
         else:
             tex.fused_cast_transpose_noop(
                 inp,
                 noop_flag,
-                fp8_meta_tensor.scale,
-                fp8_meta_tensor.amax_history,
-                fp8_meta_tensor.scale_inv,
+                fp8_scales["scale"],
+                fp8_scales["amax"],
+                fp8_scales["scale_inv"],
                 cast_out,
                 transpose_out,
                 otype,
-                scale_offset=int(fp8_tensor),
-                amax_offset=int(fp8_tensor),
-                scale_inv_offset=int(fp8_tensor),
+                **fp8_scales_offsets,
             )
-=======
-        tex.fused_cast_transpose_noop(
-            inp,
-            noop_flag,
-            fp8_scales["scale"],
-            fp8_scales["amax"],
-            fp8_scales["scale_inv"],
-            cast_out,
-            transpose_out,
-            otype,
-            **fp8_scales_offsets,
-        )
->>>>>>> upstream/release_v1.11
 
     return cast_out, transpose_out
 
@@ -118,27 +97,6 @@ def fp8_cast_transpose_bgrad_fused(
     scale_inv: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Cast + Transpose + BGRAD with FP8 output"""
-<<<<<<< HEAD
-    use_cast_transpose_triton = bool( int(os.environ.get('NVTE_USE_CAST_TRANSPOSE_TRITON', '0')) )
-    if use_cast_transpose_triton:
-        return te_cast_transpose_dbias_triton(
-            inp,
-            fp8_meta_tensor.scale[fp8_tensor],
-            fp8_meta_tensor.amax_history[0][fp8_tensor],
-            otype,
-        )
-    else:
-        return tex.fused_cast_transpose_bgrad(
-            inp,
-            fp8_meta_tensor.scale,
-            fp8_meta_tensor.amax_history,
-            fp8_meta_tensor.scale_inv,
-            otype,
-            scale_offset=int(fp8_tensor),
-            amax_offset=int(fp8_tensor),
-            scale_inv_offset=int(fp8_tensor),
-        )
-=======
 
     # Get FP8 scaling factors
     fp8_scales, fp8_scales_offsets = canonicalize_fp8_scales(
@@ -149,16 +107,24 @@ def fp8_cast_transpose_bgrad_fused(
         fp8_meta_index=fp8_tensor,
     )
 
-    # Launch kernel
-    return tex.fused_cast_transpose_bgrad(
-        inp,
-        fp8_scales["scale"],
-        fp8_scales["amax"],
-        fp8_scales["scale_inv"],
-        otype,
-        **fp8_scales_offsets,
-    )
->>>>>>> upstream/release_v1.11
+    use_cast_transpose_triton = bool( int(os.environ.get('NVTE_USE_CAST_TRANSPOSE_TRITON', '0')) )
+    if use_cast_transpose_triton:
+        return te_cast_transpose_dbias_triton(
+            inp,
+            fp8_scales["scale"][fp8_scales_offsets['scale_offset']],
+            fp8_scales["amax"][0][fp8_scales_offsets['amax_offset']],
+            otype,
+        )
+    else:
+        # Launch kernel
+        return tex.fused_cast_transpose_bgrad(
+            inp,
+            fp8_scales["scale"],
+            fp8_scales["amax"],
+            fp8_scales["scale_inv"],
+            otype,
+            **fp8_scales_offsets,
+        )
 
 
 def fp8_transpose_bgrad_fused(

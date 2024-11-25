@@ -6,17 +6,6 @@ set -e
 
 : "${TE_PATH:=/opt/transformerengine}"
 
-<<<<<<< HEAD
-cd $TE_PATH
-pip uninstall -y transformer-engine
-export NVTE_RELEASE_BUILD=1
-python setup.py bdist_wheel
-pip install dist/*
-cd transformer_engine/paddle
-python setup.py bdist_wheel
-
-export NVTE_RELEASE_BUILD=0
-=======
 pip install wheel==0.44.0 pydantic
 
 cd $TE_PATH
@@ -39,7 +28,6 @@ pip install dist/*.whl --no-deps
 
 cd transformer_engine/paddle
 NVTE_RELEASE_BUILD=1 python setup.py bdist_wheel
->>>>>>> upstream/release_v1.11
 pip install dist/*
 
 python $TE_PATH/tests/paddle/test_sanity_import.py

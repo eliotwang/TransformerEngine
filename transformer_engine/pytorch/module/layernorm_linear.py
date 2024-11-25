@@ -414,11 +414,7 @@ class _LayerNormLinear(torch.autograd.Function):
             )
 
             if ctx.cpu_offloading and ctx.fuse_wgrad_accumulation:
-<<<<<<< HEAD
-                weight = torch.nn.Parameter(weight.requires_grad)
-=======
                 weight = torch.nn.Parameter(weight, weight.requires_grad)
->>>>>>> upstream/release_v1.11
                 weight.main_grad = main_grad
 
             if ctx.ub_overlap_rs_dgrad:

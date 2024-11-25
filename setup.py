@@ -17,22 +17,15 @@ from wheel.bdist_wheel import bdist_wheel
 from build_tools.build_ext import CMakeExtension, get_build_ext
 from build_tools.te_version import te_version
 from build_tools.utils import (
-<<<<<<< HEAD
     rocm_build,
-=======
     cuda_archs,
->>>>>>> upstream/release_v1.11
     found_cmake,
     found_ninja,
     found_pybind11,
     get_frameworks,
     install_and_import,
-<<<<<<< HEAD
-    uninstall_te_fw_packages,
-=======
     remove_dups,
     uninstall_te_wheel_packages,
->>>>>>> upstream/release_v1.11
 )
 
 frameworks = get_frameworks()
@@ -69,7 +62,6 @@ def setup_common_extension() -> CMakeExtension:
     """Setup CMake extension for common library"""
     # Project directory root
     root_path = Path(__file__).resolve().parent
-<<<<<<< HEAD
     
     cmake_flags = []
     if rocm_build():
@@ -87,17 +79,13 @@ def setup_common_extension() -> CMakeExtension:
             cmake_flags.append("-DUSE_FUSED_ATTN_AOTRITON=OFF")
         if int(os.getenv("NVTE_FUSED_ATTN_CK", "1"))==0 or int(os.getenv("NVTE_FUSED_ATTN", "1"))==0:
             cmake_flags.append("-DUSE_FUSED_ATTN_CK=OFF")
-=======
->>>>>>> upstream/release_v1.11
+    else:
+        cmake_flags=["-DCMAKE_CUDA_ARCHITECTURES={}".format(cuda_archs())]
 
     return CMakeExtension(
         name="transformer_engine",
         cmake_path=root_path / Path("transformer_engine/common"),
-<<<<<<< HEAD
         cmake_flags=cmake_flags,
-=======
-        cmake_flags=["-DCMAKE_CUDA_ARCHITECTURES={}".format(cuda_archs())],
->>>>>>> upstream/release_v1.11
     )
 
 
@@ -125,7 +113,7 @@ def setup_requirements() -> Tuple[List[str], List[str], List[str]]:
         setup_reqs.append("pybind11")
 
     # Framework-specific requirements
-    if not bool(int(os.getenv("NVTE_RELEASE_BUILD", "0"))):
+    if (not rocm_build()) and (not bool(int(os.getenv("NVTE_RELEASE_BUILD", "0")))):
         if "pytorch" in frameworks:
             install_reqs.extend(["torch", "flash-attn>=2.0.6,<=2.6.3,!=2.0.9,!=2.1.0"])
             test_reqs.extend(["numpy", "onnxruntime", "torchvision", "prettytable"])
@@ -142,18 +130,8 @@ def setup_requirements() -> Tuple[List[str], List[str], List[str]]:
 if __name__ == "__main__":
     __version__ = te_version()
 
-<<<<<<< HEAD
-    ext_modules = [setup_common_extension()]
-    if not bool(int(os.getenv("NVTE_RELEASE_BUILD", "0"))):
-        # Remove residual FW packages since compiling from source
-        # results in a single binary with FW extensions included.
-        uninstall_te_fw_packages()
-        if "pytorch" in frameworks:
-            from build_tools.pytorch import setup_pytorch_extension
-=======
     with open("README.rst", encoding="utf-8") as f:
         long_description = f.read()
->>>>>>> upstream/release_v1.11
 
     # Settings for building top level empty package for dependency management.
     if bool(int(os.getenv("NVTE_BUILD_METAPACKAGE", "0"))):
@@ -225,25 +203,12 @@ if __name__ == "__main__":
                 "transformer_engine/build_tools",
             ],
         ),
-<<<<<<< HEAD
-        extras_require={
-            "test": test_requires,
-            "pytorch": [f"transformer_engine_torch=={__version__}"],
-            "jax": [f"transformer_engine_jax=={__version__}"],
-            "paddle": [f"transformer_engine_paddle=={__version__}"],
-        },
-=======
         extras_require=extras_require,
->>>>>>> upstream/release_v1.11
         description="Transformer acceleration library",
         long_description=long_description,
         long_description_content_type="text/x-rst",
         ext_modules=ext_modules,
-<<<<<<< HEAD
-        cmdclass={"build_ext": CMakeBuildExtension},
-=======
         cmdclass={"build_ext": CMakeBuildExtension, "bdist_wheel": TimedBdist},
->>>>>>> upstream/release_v1.11
         python_requires=">=3.8, <3.13",
         classifiers=[
             "Programming Language :: Python :: 3.8",

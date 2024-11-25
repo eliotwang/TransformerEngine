@@ -14,8 +14,6 @@ import re
 import shutil
 import subprocess
 import sys
-import importlib
-import importlib.metadata
 from pathlib import Path
 from subprocess import CalledProcessError
 from typing import List, Optional, Tuple, Union
@@ -232,6 +230,8 @@ def cuda_path() -> Tuple[str, str]:
 
 @functools.lru_cache(maxsize=None)
 def cuda_archs() -> str:
+    if rocm_build():
+        return os.getenv("NVTE_ROCM_ARCH", "gfx942")
     return os.getenv("NVTE_CUDA_ARCHS", "70;80;89;90")
 
 
@@ -330,14 +330,6 @@ def get_frameworks() -> List[str]:
     return _frameworks
 
 
-<<<<<<< HEAD
-def copy_common_headers(te_src, dst):
-    headers = te_src / "common"
-    for file_path in glob.glob(os.path.join(str(headers), "**", "*.h"), recursive=True):
-        new_path = os.path.join(dst, file_path[len(str(te_src)) + 1 :])
-        Path(new_path).parent.mkdir(exist_ok=True, parents=True)
-        shutil.copy(file_path, new_path)
-=======
 def copy_common_headers(
     src_dir: Union[Path, str],
     dst_dir: Union[Path, str],
@@ -371,7 +363,6 @@ def copy_common_headers(
         new_path = dst_dir / path.relative_to(src_dir)
         new_path.parent.mkdir(exist_ok=True, parents=True)
         shutil.copy(path, new_path)
->>>>>>> upstream/release_v1.11
 
 
 def install_and_import(package):
@@ -381,7 +372,21 @@ def install_and_import(package):
     globals()[main_package] = importlib.import_module(main_package)
 
 
-<<<<<<< HEAD
+def uninstall_te_wheel_packages():
+    subprocess.check_call(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "uninstall",
+            "-y",
+            "transformer_engine_cu12",
+            "transformer_engine_torch",
+            "transformer_engine_paddle",
+            "transformer_engine_jax",
+        ]
+    )
+
 def hipify(base_dir, src_dir, sources, include_dirs):
     hipify_path = base_dir / "3rdparty" / "hipify_torch"
     cwd = os.getcwd()
@@ -415,24 +420,3 @@ def hipify(base_dir, src_dir, sources, include_dirs):
         # *never* absolute paths
         hipified_sources.add(os.path.relpath(fname, cwd))
     return list(hipified_sources)
-
-def uninstall_te_fw_packages():
-=======
-def uninstall_te_wheel_packages():
->>>>>>> upstream/release_v1.11
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "uninstall",
-            "-y",
-<<<<<<< HEAD
-=======
-            "transformer_engine_cu12",
->>>>>>> upstream/release_v1.11
-            "transformer_engine_torch",
-            "transformer_engine_paddle",
-            "transformer_engine_jax",
-        ]
-    )

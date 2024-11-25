@@ -193,24 +193,14 @@ def _get_attention_backends(
         )
         return available_backends, fused_attention_backend
 
-<<<<<<< HEAD
     backends = {0: "F16_max512_seqlen", 1: "F16_arbitrary_seqlen", 2: "FP8"} if not IS_HIP_EXTENSION else {0: "AOTriton", 1: "CK"}
-    for i in range(len(backends)):
-        os.environ["NVTE_FUSED_ATTN_BACKEND"] = str(i)
-        _attention_backends["backend_selection_requires_update"] = True
-        available_backends, fused_attention_backend = test()
-        if fused_attention_backend == FusedAttnBackend[backends[i]]:
-            fused_attn_backends.append(fused_attention_backend)
-=======
-    backends = {0: "F16_max512_seqlen", 1: "F16_arbitrary_seqlen", 2: "FP8"}
     with logging_context():
-        for i in range(3):
+        for i in range(len(backends)):
             os.environ["NVTE_FUSED_ATTN_BACKEND"] = str(i)
             _attention_backends["backend_selection_requires_update"] = True
             available_backends, fused_attention_backend = test()
             if fused_attention_backend == FusedAttnBackend[backends[i]]:
                 fused_attn_backends.append(fused_attention_backend)
->>>>>>> upstream/release_v1.11
     return available_backends, fused_attn_backends
 
 
@@ -1333,9 +1323,6 @@ def _rmse(a, b):
     return math.sqrt((torch.pow((a - b), 2) / a.numel()).sum())
 
 
-<<<<<<< HEAD
-@pytest.mark.skipif(IS_HIP_EXTENSION, reason="FP8 Fused attention is not supported on ROCm")
-=======
 def _error(a, b, name_a, name_b, atol, rtol, rmse_tol):
     logging.debug(name_a + " min {:.6f} max {:.6f}".format(a.min().item(), a.max().item()))
     logging.debug(name_b + " min {:.6f} max {:.6f}".format(b.min().item(), b.max().item()))
@@ -1357,7 +1344,7 @@ def _error(a, b, name_a, name_b, atol, rtol, rmse_tol):
     )
 
 
->>>>>>> upstream/release_v1.11
+@pytest.mark.skipif(IS_HIP_EXTENSION, reason="FP8 Fused attention is not supported on ROCm")
 @pytest.mark.skipif(get_cudnn_version() < (9, 2, 1), reason="cuDNN 9.2.1+ is required.")
 @pytest.mark.skipif(not fp8_available, reason=reason_for_no_fp8)
 @pytest.mark.skipif(get_device_compute_capability() < (9, 0), reason="FP8 tests require Hopper+.")

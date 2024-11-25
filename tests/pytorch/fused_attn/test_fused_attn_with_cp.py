@@ -55,10 +55,6 @@ def get_bash_arguments(**kwargs):
 @pytest.mark.parametrize("dtype", ["bf16", "fp16"])
 @pytest.mark.parametrize("model", model_configs_flash_attn.keys())
 @pytest.mark.parametrize("qkv_format", ["bshd", "sbhd", "thd"])
-<<<<<<< HEAD
-@pytest.mark.skipif(device_count() < 2, reason="multi-GPU host is required")
-def test_cp_with_flash_attention(dtype, model, qkv_format):
-=======
 @pytest.mark.parametrize("cp_comm_type", ["p2p", "all_gather", "a2a"])
 def test_cp_with_flash_attention(dtype, model, qkv_format, cp_comm_type):
     config = model_configs_flash_attn[model]
@@ -78,7 +74,6 @@ def test_cp_with_flash_attention(dtype, model, qkv_format, cp_comm_type):
             f" num_gqa_groups ({config.num_gqa_groups}) to be divisible by cp_size (2)!"
         )
 
->>>>>>> upstream/release_v1.11
     subprocess.run(
         get_bash_arguments(
             dtype=dtype,
@@ -110,21 +105,12 @@ model_configs_fused_attn = {
 
 
 @pytest.mark.skipif(get_cudnn_version() < (8, 9, 7), reason="cuDNN 8.9.7+ is required.")
-<<<<<<< HEAD
 @pytest.mark.skipif(not IS_HIP_EXTENSION and get_device_compute_capability() < (8, 0), reason="CP tests require sm80+.")
-@pytest.mark.parametrize("dtype", ["bf16", "fp16"])
+@pytest.mark.parametrize("dtype", ["bf16", "fp16"] if IS_HIP_EXTENSION else ["bf16", "fp16", "fp8"])
 @pytest.mark.parametrize("model", model_configs_fused_attn.keys())
 @pytest.mark.parametrize("qkv_format", ["bshd", "sbhd"] if IS_HIP_EXTENSION else ["bshd", "sbhd", "thd"])
-@pytest.mark.skipif(device_count() < 2, reason="multi-GPU host is required")
-def test_cp_with_fused_attention(dtype, model, qkv_format):
-=======
-@pytest.mark.skipif(get_device_compute_capability() < (8, 0), reason="CP tests require sm80+.")
-@pytest.mark.parametrize("dtype", ["bf16", "fp16", "fp8"])
-@pytest.mark.parametrize("model", model_configs_fused_attn.keys())
-@pytest.mark.parametrize("qkv_format", ["bshd", "sbhd", "thd"])
 @pytest.mark.parametrize("cp_comm_type", ["p2p", "all_gather", "a2a"])
 def test_cp_with_fused_attention(dtype, model, qkv_format, cp_comm_type):
->>>>>>> upstream/release_v1.11
     if qkv_format == "thd" and get_device_compute_capability() < (9, 0):
         pytest.skip("THD format is only supported on sm90+!")
     if cp_comm_type == "all_gather" and get_cudnn_version() < (9, 3, 0):

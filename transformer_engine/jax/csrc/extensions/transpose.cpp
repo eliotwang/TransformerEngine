@@ -7,10 +7,7 @@
 #include "transformer_engine/transpose.h"
 
 #include "extensions.h"
-<<<<<<< HEAD
-=======
 #include "xla/ffi/api/ffi.h"
->>>>>>> upstream/release_v1.11
 
 namespace transformer_engine {
 namespace jax {

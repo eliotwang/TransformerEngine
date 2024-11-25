@@ -98,12 +98,6 @@ std::vector<at::Tensor> fused_attn_fwd_qkvpacked(
   auto qkv_sizes = QKV.sizes().vec();
   std::vector<size_t> qkv_shape{qkv_sizes.begin(), qkv_sizes.end()};
   std::vector<size_t> q_shape;
-<<<<<<< HEAD
-  //TODO: we can have 3 as in B, S, H, or D
-  for (auto i : qkv_shape) {
-    if (i != 3) {
-      q_shape.push_back(i);
-=======
   NVTE_QKV_Layout_Group layout_group = nvte_get_qkv_layout_group(qkv_layout);
   int loc_3 = 0;
   switch (layout_group) {
@@ -119,7 +113,6 @@ std::vector<at::Tensor> fused_attn_fwd_qkvpacked(
   for (auto it = qkv_shape.begin(); it != qkv_shape.end(); ++it) {
     if (it - qkv_shape.begin() != loc_3) {
       q_shape.push_back(*it);
->>>>>>> upstream/release_v1.11
     }
   }
   std::vector<int64_t> o_shape{q_shape.begin(), q_shape.end()};
@@ -407,6 +400,7 @@ std::vector<at::Tensor> fused_attn_bwd_qkvpacked(
 
   // create workspace
   TensorWrapper workspace;
+
   // populate tensors with appropriate shapes and dtypes
   nvte_fused_attn_bwd_qkvpacked(
       te_QKV.data(), te_O.data(), te_dO.data(), te_S.data(), te_dP.data(), &nvte_aux_tensor_pack,
@@ -912,7 +906,6 @@ std::vector<at::Tensor> fused_attn_fwd(
       rng_gen, at::cuda::detail::getDefaultCUDAGenerator());
 #ifndef USE_ROCM
   at::PhiloxCudaState philox_args = init_philox_state(gen, rng_elts_per_thread);
-<<<<<<< HEAD
 #else
   const transformer_engine::Tensor *input_cu_seqlens_q = reinterpret_cast<const transformer_engine::Tensor*>(te_cu_seqlens_q.data());
   size_t batch_size = input_cu_seqlens_q->data.shape[0]-1;
@@ -921,11 +914,7 @@ std::vector<at::Tensor> fused_attn_fwd(
   size_t num_attn_heads = input_Q->data.shape[ndim-2];
   at::PhiloxCudaState philox_args = init_philox_state(gen, batch_size*num_attn_heads*max_seqlen_q*max_seqlen_kv);
 #endif
-  auto options = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
-  auto rng_state = torch::empty({2}, options);
-=======
   auto rng_state = torch::empty({2}, options.dtype(torch::kInt64));
->>>>>>> upstream/release_v1.11
   unpack<<<1, 1, 0, at::cuda::getCurrentCUDAStream()>>>(
       philox_args, static_cast<int64_t *>(rng_state.data_ptr()));
   auto te_rng_state = makeTransformerEngineTensor(rng_state);

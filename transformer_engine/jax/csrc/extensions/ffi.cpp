@@ -24,10 +24,18 @@ DType convert_ffi_datatype_to_te_dtype(const xla::ffi::DataType &type) {
     case xla::ffi::DataType::BF16:
       return DType::kBFloat16;
       break;
+#ifndef USE_ROCM
     case xla::ffi::DataType::F8E5M2:
+#else
+    case xla::ffi::DataType::F8E5M2FNUZ:
+#endif
       return DType::kFloat8E5M2;
       break;
+#ifndef USE_ROCM
     case xla::ffi::DataType::F8E4M3FN:
+#else
+    case xla::ffi::DataType::F8E4M3FNUZ:
+#endif
       return DType::kFloat8E4M3;
       break;
     default:

@@ -150,8 +150,6 @@ void te_grouped_gemm(std::vector<at::Tensor> A, at::Tensor A_scale_inverse, int 
                                 te_pre_gelu_out.data(), te_A.size(), transa, transb, grad,
                                 te_workspace.data(), accumulate, use_split_accumulator,
                                 math_sm_count, at::cuda::getCurrentCUDAStream());
-<<<<<<< HEAD
-=======
 }
 
 void te_grouped_gemm_single_output(
@@ -213,5 +211,4 @@ void te_grouped_gemm_single_output(
                                 te_pre_gelu_out.data(), te_A.size(), transa, transb, grad,
                                 te_workspace.data(), accumulate, use_split_accumulator,
                                 math_sm_count, at::cuda::getCurrentCUDAStream());
->>>>>>> upstream/release_v1.11
 }

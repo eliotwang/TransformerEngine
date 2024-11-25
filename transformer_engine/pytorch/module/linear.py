@@ -389,11 +389,7 @@ class _Linear(torch.autograd.Function):
             )
 
             if ctx.cpu_offloading and ctx.fuse_wgrad_accumulation:
-<<<<<<< HEAD
-                weight = torch.nn.Parameter(weight.requires_grad)
-=======
                 weight = torch.nn.Parameter(weight, weight.requires_grad)
->>>>>>> upstream/release_v1.11
                 weight.main_grad = main_grad
 
             tp_world_size = get_distributed_world_size(ctx.tp_group)

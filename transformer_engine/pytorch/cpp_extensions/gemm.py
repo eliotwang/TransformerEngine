@@ -435,16 +435,6 @@ def fp8_grouped_gemm(
 
     # Use bfloat16 as default bias_dtype
     bias_dtype = torch.bfloat16 if bias is None else bias[0].dtype
-<<<<<<< HEAD
-    if gelu:
-        gelu_input = [
-            torch.empty_like(o, dtype=bias_dtype, memory_format=torch.contiguous_format)
-            for o in out
-        ]
-    else:
-        gelu_input = empty_tensors
-=======
->>>>>>> upstream/release_v1.11
     bias_dtype = TE_DType[bias_dtype]
     gelu_input = empty_tensors
     out_dtype = TE_DType[out[0].dtype] if D_dtype is None else D_dtype

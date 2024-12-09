@@ -230,8 +230,6 @@ def cuda_path() -> Tuple[str, str]:
 
 @functools.lru_cache(maxsize=None)
 def cuda_archs() -> str:
-    if rocm_build():
-        return os.getenv("NVTE_ROCM_ARCH", "gfx942")
     return os.getenv("NVTE_CUDA_ARCHS", "70;80;89;90")
 
 

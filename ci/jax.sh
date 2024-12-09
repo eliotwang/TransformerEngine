@@ -10,9 +10,9 @@ DIR=`dirname $0`
 install_praxis() {
     git clone https://github.com/google/praxis.git && cd praxis || return $?
     git checkout $_praxis_commit || return $?
-    #Remove unndcessary dependencies for testing and make sure JAX is not upgraded
+    #Remove unnecessary dependencies for testing and make sure JAX is not upgraded
     sed -i -e 's/^flax/#flax/;s/^jax /#jax /;s/^opt/#opt/;s/^tensorflow/#tensorflow/' requirements.in || return $?
-    pip list | awk '/jax/ { print $1"=="$2}' > requirements.in
+    pip list | awk '/jax/ { print $1"=="$2}' >> requirements.in
     pip install . --log build.log
     rc=$?
     if [ $rc -ne 0 ]; then
@@ -29,7 +29,6 @@ install_prerequisites() {
     if [ $? -eq 0 ]; then
         echo "JAX lib 0.4.23 is detected"
         _praxis_commit="2ebe1cf6a3d89"
-        _typing_exttensions_ver="4.6.1"
     fi
 
     pip show praxis >/dev/null 2>&1
@@ -45,7 +44,7 @@ install_prerequisites() {
         test $rc -eq 0 || exit $rc
     fi
 
-    pip install ml-dtypes==0.2.0 typing_extensions==$_typing_exttensions_ver
+    pip install 'ml-dtypes>=0.2.0' 'typing_extensions>=4.11.0'
     rc=$?
     if [ $rc -ne 0 ]; then
         script_error "Failed to install test prerequisites"
@@ -61,7 +60,7 @@ run() {
     _test_name_tag=`get_test_name_tag $1 $_fus_attn`
     check_test_filter $_test_name_tag || return
     echo "Run [$_fus_attn] $*"
-    pytest `get_pytest_junitxml $_test_name_tag` "$TEST_DIR/$@" || test_run_error
+    pytest -v `get_pytest_junitxml $_test_name_tag` "$TEST_DIR/$@" || test_run_error
     echo "Done [$_fus_attn] $1"
 }
 

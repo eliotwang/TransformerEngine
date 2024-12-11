@@ -219,7 +219,7 @@ void fused_attn_ck_fwd_impl(
   int64_t window_size_left, int64_t window_size_right,
   void *devPtrQ, void *devPtrK, void *devPtrV, void* devPtrBias,
   void *devPtrSoftmaxAux, void *devPtrO,
-  const uint64_t* devPtrDropoutSeed, const uint64_t* devPtrDropoutOffset,
+  void* devPtrDropoutSeed, void* devPtrDropoutOffset,
   //void* devPtrCuSeqlensQ, void* devPtrCuSeqlensKV,
   ck_fused_attn::DType dtype,
   void *workspace, 
@@ -263,15 +263,6 @@ void fused_attn_ck_fwd_impl(
   generateMatrixStrides(b, h, s_q, s_kv, d, o_stride.data(),
                         layout, NVTE_QKV_Matrix::NVTE_O_Matrix);
 
-  //devPtrDropoutSeed and devPtrDropoutOffset are actually device ptrs
-  uint64_t philox_seed, philox_offset;
-  //skip this synchronization if dropout is not needed
-  if(is_training && dropout_probability > 0.f){
-    (void)cudaStreamSynchronize(stream);
-    (void)cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-    (void)cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-  }
-  
   void* devPtrAlibiSlope = nullptr;
   if(bias_type == NVTE_Bias_Type::NVTE_ALIBI){
     devPtrAlibiSlope = workspace;
@@ -296,7 +287,7 @@ void fused_attn_ck_fwd_impl(
     std::cout<<"o_stride: ("<<o_stride[0]<<", "<<o_stride[1]<<", "<<o_stride[2]<<", "<<o_stride[3]<<"), ";
     std::cout<<"is_training: "<<is_training<<", ";
     std::cout<<"dropout_p: "<<dropout_probability<<", ";
-    std::cout<<"philox_seed: "<<philox_seed<<", philox_offset: "<<philox_offset<<", ";
+    std::cout<<"philox_seed_ptr: "<<devPtrDropoutSeed<<", philox_offset_ptr: "<<devPtrDropoutOffset<<", ";
     std::cout<<"bias_type: "<<bias_type<<std::endl;
     std::cout<<"(bias_b, bias_h): ("<<bias_b<<", "<<bias_h<<"), ";
     std::cout<<"mask_type: "<<mask_type<<std::endl;
@@ -316,7 +307,7 @@ void fused_attn_ck_fwd_impl(
       devPtrBias,
       devPtrAlibiSlope,
       is_training, scaling_factor, dropout_probability,
-      philox_seed, philox_offset,
+      devPtrDropoutSeed, devPtrDropoutOffset,
       nvte_to_ck_bias_type(bias_type),
       set_ck_mask(mask_type, window_size_left, window_size_right),
       window_size_left, window_size_right,
@@ -344,13 +335,14 @@ void fused_attn_ck_bwd_impl(
   NVTE_QKV_Layout layout,
   NVTE_Bias_Type bias_type, NVTE_Mask_Type mask_type,
   int64_t window_size_left, int64_t window_size_right,
+  bool deterministic,
   void* devPtrQ, void* devPtrK, void* devPtrV,
   void* devPtrO, void* devPtrSoftmaxAux, void* devPtrBias,
   void* devPtrdQ, void* devPtrdK, void* devPtrdV, 
   void* devPtrdO, 
   void* devPtrdBias,
-  const uint64_t* devPtrDropoutSeed, 
-  const uint64_t* devPtrDropoutOffset,
+  void* devPtrDropoutSeed, 
+  void* devPtrDropoutOffset,
   ck_fused_attn::DType dtype,
   void *workspace,
   size_t *workspace_size,
@@ -364,11 +356,13 @@ void fused_attn_ck_bwd_impl(
 
   bool is_mqa_gqa = (h > hg);
 
+  size_t kN0 = (d <= 128)? 128:64;
+  size_t nsplits = deterministic? ceil(1.0*s_kv/kN0):1; 
   // Exit to request upper level API to allocate memory if needed
   if(workspace==nullptr){
     size_t workspace_size_lse = b*h*s_q*sizeof(float);
-    // CK requires dq_acc ptr
-    size_t workspace_size_dq_acc = b*h*s_q*d*sizeof(float);
+    // CK requires dq_acc ptr, dq_acc depends on is deterministic
+    size_t workspace_size_dq_acc = nsplits*b*h*s_q*d*sizeof(float);
     *workspace_size = workspace_size_lse + workspace_size_dq_acc;
     if(is_mqa_gqa){
       // allocate dk, dv (or dkv) as if h=hg
@@ -417,19 +411,12 @@ void fused_attn_ck_bwd_impl(
   std::array<uint64_t, 4> q_shape{b, h, s_q, d};
   std::array<uint64_t, 4> kv_shape{b, hg, s_kv, d};
   
-  uint64_t philox_seed, philox_offset;
-  if(dropout_probability > 0.f){
-    (void)cudaStreamSynchronize(stream);
-    (void)cudaMemcpy(&philox_seed, devPtrDropoutSeed, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-    (void)cudaMemcpy(&philox_offset, devPtrDropoutOffset, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-  }
-
   // First b*h*sq*sizeof(float) in workspace are for lse
   // The next section are for dq_acc_ptr
   void* dq_acc_ptr = static_cast<void *>(static_cast<int8_t*>(workspace) + b*h*s_q*sizeof(float));
   // like dq, dq_acc mem also requires zeroing out
-  //dq_acc is of shape (B, S, H, D)
-  NVTE_CHECK_CUDA(cudaMemsetAsync(dq_acc_ptr, 0, sizeof(float)*b*h*s_q*d, stream));
+  //dq_acc is of shape (nsplits, B, S, H, D)
+  NVTE_CHECK_CUDA(cudaMemsetAsync(dq_acc_ptr, 0, sizeof(float)*nsplits*b*h*s_q*d, stream));
   
   void* dk_expanded_ptr = nullptr;
   void* dv_expanded_ptr = nullptr;
@@ -441,7 +428,7 @@ void fused_attn_ck_bwd_impl(
                           layout, NVTE_QKV_Matrix::NVTE_K_Matrix);
 
     // dk_expanded arranged at the end of dq_acc_ptr
-    dk_expanded_ptr = static_cast<void *>(static_cast<int8_t*>(dq_acc_ptr) + b*h*s_q*d*sizeof(float));
+    dk_expanded_ptr = static_cast<void *>(static_cast<int8_t*>(dq_acc_ptr) + nsplits*b*h*s_q*d*sizeof(float));
 
     //dv_expanded_ptr depends on the actual layout
     if(layout_group == NVTE_QKV_Layout_Group::NVTE_HD_2HD){
@@ -465,7 +452,7 @@ void fused_attn_ck_bwd_impl(
       devPtrAlibiSlope = static_cast<void *>(static_cast<int8_t*>(dk_expanded_ptr) + 2*b*h*s_kv*d*ck_dtype_size(dtype));
     }else{
       // devPtrAlibiSlope at the end of dq_acc_ptr if no mqa/gqa temp buffer needed
-      devPtrAlibiSlope = static_cast<void *>(static_cast<int8_t*>(dq_acc_ptr) + b*h*s_q*d*sizeof(float));
+      devPtrAlibiSlope = static_cast<void *>(static_cast<int8_t*>(dq_acc_ptr) + nsplits*b*h*s_q*d*sizeof(float));
     }
 
     dim3 block, grid;
@@ -479,8 +466,8 @@ void fused_attn_ck_bwd_impl(
       if(is_mqa_gqa){
         dbias_expanded_ptr = static_cast<void *>(static_cast<int8_t*>(dk_expanded_ptr) + 2*b*h*s_kv*d*ck_dtype_size(dtype));
       }else{
-        // devPtrAlibiSlope at the end of dq_acc_ptr if no mqa/gqa temp buffer needed
-        dbias_expanded_ptr = static_cast<void *>(static_cast<int8_t*>(dq_acc_ptr) + b*h*s_q*d*sizeof(float));
+        // dbias_expanded_ptr at the end of dq_acc_ptr if no mqa/gqa temp buffer needed
+        dbias_expanded_ptr = static_cast<void *>(static_cast<int8_t*>(dq_acc_ptr) + nsplits*b*h*s_q*d*sizeof(float));
       }
       // zeroing out dbias_expanded_ptr as CK requires that
       NVTE_CHECK_CUDA(cudaMemsetAsync(dbias_expanded_ptr, 0, ck_dtype_size(dtype)*b*h*s_q*s_kv, stream));
@@ -489,7 +476,14 @@ void fused_attn_ck_bwd_impl(
       NVTE_CHECK_CUDA(cudaMemsetAsync(devPtrdBias, 0, ck_dtype_size(dtype)*bias_b*bias_h*s_q*s_kv, stream));
     }
   }
- 
+  
+  // bwd v3 is optional by enabling the following envs
+  // default values follows the ck example setting
+  bool nvte_ck_uses_bwd_v3 = getenv<int>("NVTE_CK_USES_BWD_V3", 0);
+  bool nvte_ck_is_v3_atomic_fp32 = getenv<int>("NVTE_CK_IS_V3_ATOMIC_FP32", 1);
+  bool nvte_ck_is_v3_spec = getenv<int>("NVTE_CK_IS_V3_SPEC", 0);
+  int nvte_ck_how_v3_bf16_cvt = getenv<int>("NVTE_CK_HOW_V3_BF16_CVT", 1);
+
   if (nvte_log_ck_config) {
     std::cout<<std::endl<<"attn_bwd(ck): ";
     std::cout<<"q_shape: ("<<b<<", "<<h<<", "<<s_q<<", "<<d<<"), ";
@@ -503,11 +497,12 @@ void fused_attn_ck_bwd_impl(
     std::cout<<"o_shape: ("<<b<<", "<<h<<", "<<s_q<<", "<<d<<"), ";
     std::cout<<"o_stride: ("<<o_stride[0]<<", "<<o_stride[1]<<", "<<o_stride[2]<<", "<<o_stride[3]<<"), ";
     std::cout<<"dropout_p: "<<dropout_probability<<", ";
-    std::cout<<"philox_seed: "<<philox_seed<<", philox_offset: "<<philox_offset<<", ";
+    std::cout<<"philox_seed_ptr: "<<devPtrDropoutSeed<<", philox_offset_ptr: "<<devPtrDropoutOffset<<", ";
     std::cout<<"bias_type: "<<bias_type<<std::endl;
     std::cout<<"(bias_b, bias_h): ("<<bias_b<<", "<<bias_h<<"), ";
     std::cout<<"mask_type: "<<mask_type<<std::endl;
     std::cout<<"window_size: ("<<window_size_left<<", "<<window_size_right<<")"<<std::endl;
+    std::cout<<"deterministic: "<<deterministic<<std::endl;
   }
   using ck_fused_attn::ck_attn_bwd;
   NVTE_CHECK_CUDA(
@@ -528,7 +523,7 @@ void fused_attn_ck_bwd_impl(
       devPtrdO,
       o_stride[0], o_stride[1], o_stride[2], //dO and O share the same stride
       scaling_factor, dropout_probability,
-      philox_seed, philox_offset,
+      devPtrDropoutSeed, devPtrDropoutOffset,
       nvte_to_ck_bias_type(bias_type),
       set_ck_mask(mask_type, window_size_left, window_size_right),
       window_size_left, window_size_right,
@@ -545,6 +540,11 @@ void fused_attn_ck_bwd_impl(
       dbias_expanded_ptr,
       devPtrdBias,
       workspace,
+      deterministic,
+      nvte_ck_uses_bwd_v3,
+      nvte_ck_is_v3_atomic_fp32,
+      nvte_ck_is_v3_spec,
+      nvte_ck_how_v3_bf16_cvt,
       stream));
 }
 #endif // USE_FUSED_ATTN_CK
@@ -641,8 +641,8 @@ void fused_attn_ck_fwd_qkvpacked(
     window_size_left, window_size_right,
     devPtrQ, devPtrK, devPtrV, devPtrBias,
     devPtrS, devPtrO,
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr), 
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr) + 1,
+    rng_state->data.dptr, 
+    reinterpret_cast<void *>(reinterpret_cast<uint64_t *>(rng_state->data.dptr) + 1),
     nvte_to_ck_dtype(QKV_type),
     workspace->data.dptr,
     &workspace_size,
@@ -671,6 +671,7 @@ void fused_attn_ck_bwd_qkvpacked(
   float attn_scale, float dropout, 
   NVTE_QKV_Layout qkv_layout, NVTE_Bias_Type bias_type, NVTE_Mask_Type attn_mask_type,
   int64_t window_size_left, int64_t window_size_right,
+  bool deterministic,
   const Tensor* input_QKV, const Tensor* input_O, const Tensor* input_dO, const Tensor* input_Bias, 
   const Tensor* output_S,
   Tensor* output_dQKV,
@@ -723,12 +724,13 @@ void fused_attn_ck_bwd_qkvpacked(
     qkv_layout,
     bias_type, attn_mask_type,
     window_size_left, window_size_right,
+    deterministic,
     devPtrQ, devPtrK, devPtrV, 
     devPtrO, devPtrSoftmaxStats, devPtrBias,
     devPtrdQ, devPtrdK, devPtrdV, 
     devPtrdO, devPtrdBias,
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr), 
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr) + 1,
+    rng_state->data.dptr, 
+    reinterpret_cast<void *>(reinterpret_cast<uint64_t *>(rng_state->data.dptr) + 1),
     nvte_to_ck_dtype(QKV_type),
     workspace->data.dptr,
     &workspace_size,
@@ -843,8 +845,8 @@ void fused_attn_ck_fwd_kvpacked(
     window_size_left, window_size_right,
     devPtrQ, devPtrK, devPtrV, devPtrBias,
     devPtrS, devPtrO,
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr), 
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr) + 1,
+    rng_state->data.dptr, 
+    reinterpret_cast<void *>(reinterpret_cast<uint64_t *>(rng_state->data.dptr) + 1),
     nvte_to_ck_dtype(QKV_type),
     workspace->data.dptr,
     &workspace_size,
@@ -873,6 +875,7 @@ void fused_attn_ck_bwd_kvpacked(
   float attn_scale, float dropout, 
   NVTE_QKV_Layout qkv_layout, NVTE_Bias_Type bias_type, NVTE_Mask_Type attn_mask_type,
   int64_t window_size_left, int64_t window_size_right,
+  bool deterministic,
   const Tensor* input_Q, const Tensor* input_KV, const Tensor* input_O, const Tensor* input_dO, const Tensor* input_Bias, 
   const Tensor* output_S,
   Tensor* output_dQ, Tensor* output_dKV,
@@ -925,12 +928,13 @@ void fused_attn_ck_bwd_kvpacked(
     qkv_layout,
     bias_type, attn_mask_type,
     window_size_left, window_size_right,
+    deterministic,
     devPtrQ, devPtrK, devPtrV, 
     devPtrO, devPtrSoftmaxStats, devPtrBias,
     devPtrdQ, devPtrdK, devPtrdV, 
     devPtrdO, devPtrdBias,
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr), 
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr) + 1,
+    rng_state->data.dptr, 
+    reinterpret_cast<void *>(reinterpret_cast<uint64_t *>(rng_state->data.dptr) + 1),
     nvte_to_ck_dtype(QKV_type),
     workspace->data.dptr,
     &workspace_size,
@@ -1035,8 +1039,8 @@ void fused_attn_ck_fwd(
     window_size_left, window_size_right,
     devPtrQ, devPtrK, devPtrV, devPtrBias, 
     devPtrS, devPtrO,
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr), 
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr) + 1,
+    rng_state->data.dptr, 
+    reinterpret_cast<void *>(reinterpret_cast<uint64_t *>(rng_state->data.dptr) + 1),
     nvte_to_ck_dtype(QKV_type),
     workspace->data.dptr,
     &workspace_size,
@@ -1065,6 +1069,7 @@ void fused_attn_ck_bwd(
   float attn_scale, float dropout, 
   NVTE_QKV_Layout qkv_layout, NVTE_Bias_Type bias_type, NVTE_Mask_Type attn_mask_type,
   int64_t window_size_left, int64_t window_size_right,
+  bool deterministic,
   const Tensor* input_Q, const Tensor* input_K, const Tensor* input_V, const Tensor* input_O, const Tensor* input_dO, const Tensor* input_Bias, 
   const Tensor* output_S,
   Tensor* output_dQ, Tensor* output_dK, Tensor* output_dV,
@@ -1106,12 +1111,13 @@ void fused_attn_ck_bwd(
     qkv_layout,
     bias_type, attn_mask_type,
     window_size_left, window_size_right,
+    deterministic,
     devPtrQ, devPtrK, devPtrV, 
     devPtrO, devPtrSoftmaxStats, devPtrBias,
     devPtrdQ, devPtrdK, devPtrdV, 
     devPtrdO, devPtrdBias,
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr), 
-    reinterpret_cast<const uint64_t *>(rng_state->data.dptr) + 1,
+    rng_state->data.dptr, 
+    reinterpret_cast<void *>(reinterpret_cast<uint64_t *>(rng_state->data.dptr) + 1),
     nvte_to_ck_dtype(QKV_type),
     workspace->data.dptr,
     &workspace_size,

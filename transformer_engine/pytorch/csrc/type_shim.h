@@ -8,6 +8,7 @@
 #pragma once
 
 #include <ATen/ATen.h>
+#include "common/utils.cuh"
 
 // Forward/backward compatiblity hack around
 // https://github.com/pytorch/pytorch/commit/3aeb78079bcd68282fe9117088e138b77318e288
@@ -299,7 +300,7 @@ reduce_block_into_lanes(T *x, T val, int lanes = 1,
 #pragma unroll
     for (int i = 16; i >= lanes; i >>= 1) {       
 #ifdef __HIP_PLATFORM_AMD__
-      final = final + __shfl_down(final, i, 32);
+      final = final + __shfl_down(final, i, THREADS_PER_WARP);
 #else
       final = final + __shfl_down_sync(0xffffffff, final, i);
 #endif
@@ -346,7 +347,7 @@ reduce_block_into_lanes_max_op(T *x, T val, int lanes = 1,
 #pragma unroll
     for (int i = 16; i >= lanes; i >>= 1) {
 #ifdef __HIP_PLATFORM_AMD__
-      final = fmaxf(fabsf(final), fabsf(__shfl_down(final, i, 32)));
+      final = fmaxf(fabsf(final), fabsf(__shfl_down(final, i, THREADS_PER_WARP)));
 #else
       final = fmaxf(fabsf(final), fabsf(__shfl_down_sync(0xffffffff, final, i)));
 #endif

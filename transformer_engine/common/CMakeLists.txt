@@ -281,14 +281,14 @@ endif()
 # Helper functions to make header files with C++ strings
 function(make_string_header STRING STRING_NAME)
     configure_file(util/string_header.h.in
-                    "string_headers/${STRING_NAME}.h"
-                    @ONLY)
+                   "string_headers/${STRING_NAME}.h"
+                   @ONLY)
 endfunction()
 function(make_string_header_from_file file_ STRING_NAME)
     file(READ "${file_}" STRING)
     configure_file(util/string_header.h.in
-                    "string_headers/${STRING_NAME}.h"
-                    @ONLY)
+                   "string_headers/${STRING_NAME}.h"
+                   @ONLY)
 endfunction()
 
 if(USE_CUDA)
@@ -319,9 +319,9 @@ else()
                                string_code_amd_detail_hip_f8_impl_h)
 endif()
 make_string_header_from_file(util/math.h
-                            string_code_util_math_h)
+                             string_code_util_math_h)
 target_include_directories(transformer_engine PRIVATE
-                          "${CMAKE_CURRENT_BINARY_DIR}/string_headers")
+                           "${CMAKE_CURRENT_BINARY_DIR}/string_headers")
 
 # Compiler options
 set_source_files_properties(fused_softmax/scaled_masked_softmax.cu
@@ -361,6 +361,8 @@ else()
     set(HIP_HCC_FLAGS "${HIP_HCC_FLAGS} --offload-arch=${rocm_arch}")
   endforeach()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${HIP_HCC_FLAGS}")
+  # Hide non-necessary symbols in shared object.
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libtransformer_engine.version")
 endif()
 
 # Install library

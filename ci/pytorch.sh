@@ -57,10 +57,10 @@ run_test_config(){
     run 1 test_multi_tensor.py
     run 1 test_numerics.py -k "$_graph_filter"
     run 3 test_onnx_export.py
+    run 1 test_permutation.py
     run 1 test_recipe.py
     run 1 test_sanity.py -k "$_graph_filter"
     run 1 test_torch_save_load.py
-    run 1 test_permutation.py
     test $_fus_attn != "unfused" && run 1 fused_attn/test_fused_attn.py
 }
 

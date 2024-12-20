@@ -7,12 +7,18 @@ DIR=`dirname $0`
 
 . $DIR/_utils.sh
 
+install_flax() {
+    pip list | awk '/jax/ { print $1"=="$2}' > reqs
+    pip install flax -r reqs
+}
+
 install_praxis() {
     git clone https://github.com/google/praxis.git && cd praxis || return $?
     git checkout $_praxis_commit || return $?
     #Remove unnecessary dependencies for testing and make sure JAX is not upgraded
     sed -i -e 's/^flax/#flax/;s/^jax /#jax /;s/^opt/#opt/;s/^tensorflow/#tensorflow/' requirements.in || return $?
     pip list | awk '/jax/ { print $1"=="$2}' >> requirements.in
+    pip list | awk '/transformer_engine/ { print $1"=="$2}' >> requirements.in
     pip install . --log build.log
     rc=$?
     if [ $rc -ne 0 ]; then
@@ -23,6 +29,12 @@ install_praxis() {
 }
 
 install_prerequisites() {
+    install_flax; rc=$?
+    if [ $rc -ne 0 ]; then
+        script_error "Failed to install flax"
+        exit $rc
+    fi
+
     _praxis_commit="899b56ebe9128a0"
     pip show jaxlib | grep Version | grep -q 0.4.23
     if [ $? -eq 0 ]; then
@@ -47,8 +59,6 @@ install_prerequisites() {
         test $rc -eq 0 || exit $rc
     fi
 
-    pip install 'ml-dtypes>=0.2.0' 'typing_extensions>=4.11.0'
-    rc=$?
     if [ $rc -ne 0 ]; then
         script_error "Failed to install test prerequisites"
         exit $rc

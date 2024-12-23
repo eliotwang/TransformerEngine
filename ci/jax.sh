@@ -7,11 +7,6 @@ DIR=`dirname $0`
 
 . $DIR/_utils.sh
 
-install_flax() {
-    pip list | awk '/jax/ { print $1"=="$2}' > reqs
-    pip install flax -r reqs
-}
-
 install_praxis() {
     git clone https://github.com/google/praxis.git && cd praxis || return $?
     git checkout $_praxis_commit || return $?
@@ -29,12 +24,6 @@ install_praxis() {
 }
 
 install_prerequisites() {
-    install_flax; rc=$?
-    if [ $rc -ne 0 ]; then
-        script_error "Failed to install flax"
-        exit $rc
-    fi
-
     _praxis_commit="899b56ebe9128a0"
     pip show jaxlib | grep Version | grep -q 0.4.23
     if [ $? -eq 0 ]; then
@@ -57,11 +46,6 @@ install_prerequisites() {
         cd "$_curr_dir"
         rm -rf $_tmp_dir
         test $rc -eq 0 || exit $rc
-    fi
-
-    if [ $rc -ne 0 ]; then
-        script_error "Failed to install test prerequisites"
-        exit $rc
     fi
 }
 

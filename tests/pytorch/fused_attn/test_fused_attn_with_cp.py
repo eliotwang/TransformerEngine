@@ -113,10 +113,10 @@ model_configs_fused_attn = {
 @pytest.mark.parametrize("cp_comm_type", ["p2p", "all_gather", "a2a"])
 @pytest.mark.skipif(device_count() < 2, reason="multi-GPU host is required")
 def test_cp_with_fused_attention(dtype, model, qkv_format, cp_comm_type):
-    if (not IS_HIP_EXTENSION) and qkv_format == "thd" and get_device_compute_capability() < (9, 0):
-        pytest.skip("THD format is only supported on sm90+!")
     if IS_HIP_EXTENSION and qkv_format == "thd":
         pytest.skip("THD format has not been supported on ROCm yet!")
+    if qkv_format == "thd" and get_device_compute_capability() < (9, 0):
+        pytest.skip("THD format is only supported on sm90+!")
     if cp_comm_type == "all_gather" and get_cudnn_version() < (9, 3, 0):
         pytest.skip("CP implementation with KV all-gather is only supported with cuDNN >= 9.3.0!")
     if (not IS_HIP_EXTENSION) and dtype == "fp8" and get_device_compute_capability() < (9, 0):

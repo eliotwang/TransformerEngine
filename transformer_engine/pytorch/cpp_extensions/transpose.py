@@ -69,6 +69,7 @@ def fp8_cast_transpose_fused(
                 cast_out,
                 transpose_out,
                 fp8_scales["amax"][0][fp8_scales_offsets['amax_offset']],
+                fp8_scales["scale_inv"][fp8_scales_offsets['scale_inv_offset']],
                 otype,
             )
         else:
@@ -113,6 +114,7 @@ def fp8_cast_transpose_bgrad_fused(
             inp,
             fp8_scales["scale"][fp8_scales_offsets['scale_offset']],
             fp8_scales["amax"][0][fp8_scales_offsets['amax_offset']],
+            fp8_scales["scale_inv"][fp8_scales_offsets['scale_inv_offset']],
             otype,
         )
     else:

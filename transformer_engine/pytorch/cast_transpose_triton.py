@@ -38,7 +38,7 @@ def get_fp8_max(dtype: tex.DType):
         key=['M', 'N']
 )
 @triton.jit
-def _cast_transpose_triton(A, noop_ptr, C, T, stride_am, stride_an, stride_bn, stride_bm, M, N, scale_ptr, amax_ptr, max_fp8: tl.constexpr, use_noop: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, GROUP_M: tl.constexpr):
+def _cast_transpose_triton(A, noop_ptr, C, T, stride_am, stride_an, stride_bn, stride_bm, M, N, scale_ptr, amax_ptr, scale_inv_ptr, max_fp8: tl.constexpr, use_noop: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, GROUP_M: tl.constexpr):
     if use_noop:
         noop = tl.load(noop_ptr)
         if noop == 1.0:
@@ -78,8 +78,10 @@ def _cast_transpose_triton(A, noop_ptr, C, T, stride_am, stride_an, stride_bn, s
 
     amax = tl.max(tl.abs(a))
     tl.atomic_max(amax_ptr, amax, sem='relaxed')
+    scale_inv_out = tl.fdiv(1.0, scale)
+    tl.store(scale_inv_ptr, scale_inv_out)
 
-def te_cast_transpose_noop_triton(input, noop_flag, input_scale, cast_out, trans_out, amax_out, otype):
+def te_cast_transpose_noop_triton(input, noop_flag, input_scale, cast_out, trans_out, amax_out, scale_inv_out, otype):
 
     M, N = input.shape
     
@@ -93,7 +95,7 @@ def te_cast_transpose_noop_triton(input, noop_flag, input_scale, cast_out, trans
         use_noop = False
     
     grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
-    _cast_transpose_triton[grid](input, noop_flag, triton.reinterpret(cast_out, tl_dtype), triton.reinterpret(trans_out, tl_dtype), input.stride(0), input.stride(1), trans_out.stride(0), trans_out.stride(1), M, N, input_scale, amax_out, get_fp8_max(otype), use_noop)
+    _cast_transpose_triton[grid](input, noop_flag, triton.reinterpret(cast_out, tl_dtype), triton.reinterpret(trans_out, tl_dtype), input.stride(0), input.stride(1), trans_out.stride(0), trans_out.stride(1), M, N, input_scale, amax_out, scale_inv_out, get_fp8_max(otype), use_noop)
 
 ##########################################
 #### cast_transpose_dbias
@@ -107,7 +109,7 @@ def te_cast_transpose_noop_triton(input, noop_flag, input_scale, cast_out, trans
         key=['M', 'N']
 )
 @triton.jit
-def _transpose_triton_dbias(A, C, T, stride_am, stride_an, stride_bn, stride_bm, M, N, scale_ptr, amax_ptr, partial_dbias, fp8_max: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, GROUP_M: tl.constexpr):
+def _transpose_triton_dbias(A, C, T, stride_am, stride_an, stride_bn, stride_bm, M, N, scale_ptr, amax_ptr, scale_inv_ptr, partial_dbias, fp8_max: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, GROUP_M: tl.constexpr):
     pid = tl.program_id(0)
     scale = tl.load(scale_ptr)
 
@@ -145,6 +147,8 @@ def _transpose_triton_dbias(A, C, T, stride_am, stride_an, stride_bn, stride_bm,
     tl.store(T, fp8_a, mask=mask)
     amax = tl.max(tl.abs(a))
     tl.atomic_max(amax_ptr, amax, sem='relaxed')
+    scale_inv_out = tl.fdiv(1.0, scale)
+    tl.store(scale_inv_ptr, scale_inv_out)
 
 # There is a Triton bug that makes this kernel produce incorrect result
 # Not in use for now
@@ -180,7 +184,7 @@ def _reduce_bias_triton(A, out, stride_am, stride_an, M, N, BLOCK_M: tl.constexp
 def reduce_dbias_kernel(partial_dbias, dtype):
     return partial_dbias.to(torch.float32).sum(axis=0).to(dtype)
 
-def te_cast_transpose_dbias_triton(input, input_scale, amax_out, otype):
+def te_cast_transpose_dbias_triton(input, input_scale, amax_out, scale_inv_out, otype):
     M, N = input.shape
     cast_out = torch.empty(M, N, dtype=torch.uint8, device='cuda')
     trans_out = torch.empty(N, M, dtype=torch.uint8, device='cuda')
@@ -199,7 +203,7 @@ def te_cast_transpose_dbias_triton(input, input_scale, amax_out, otype):
     tl_dtype = get_triton_dtype(otype)
     
     grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
-    _transpose_triton_dbias[grid](input, triton.reinterpret(cast_out, tl_dtype), triton.reinterpret(trans_out, tl_dtype), input.stride(0), input.stride(1), trans_out.stride(0), trans_out.stride(1), M, N, input_scale, amax_out, partial_dbias, get_fp8_max(otype))
+    _transpose_triton_dbias[grid](input, triton.reinterpret(cast_out, tl_dtype), triton.reinterpret(trans_out, tl_dtype), input.stride(0), input.stride(1), trans_out.stride(0), trans_out.stride(1), M, N, input_scale, amax_out, scale_inv_out, partial_dbias, get_fp8_max(otype))
     best_config = _transpose_triton_dbias.best_config
     block_m_1 = int(best_config.kwargs['BLOCK_M'])
 

@@ -78,8 +78,9 @@ def _cast_transpose_triton(A, noop_ptr, C, T, stride_am, stride_an, stride_bn, s
 
     amax = tl.max(tl.abs(a))
     tl.atomic_max(amax_ptr, amax, sem='relaxed')
-    scale_inv_out = tl.fdiv(1.0, scale)
-    tl.store(scale_inv_ptr, scale_inv_out)
+    if pid == 0:
+        scale_inv_out = tl.fdiv(1.0, scale)
+        tl.store(scale_inv_ptr, scale_inv_out)
 
 def te_cast_transpose_noop_triton(input, noop_flag, input_scale, cast_out, trans_out, amax_out, scale_inv_out, otype):
 
@@ -147,8 +148,9 @@ def _transpose_triton_dbias(A, C, T, stride_am, stride_an, stride_bn, stride_bm,
     tl.store(T, fp8_a, mask=mask)
     amax = tl.max(tl.abs(a))
     tl.atomic_max(amax_ptr, amax, sem='relaxed')
-    scale_inv_out = tl.fdiv(1.0, scale)
-    tl.store(scale_inv_ptr, scale_inv_out)
+    if pid == 0:
+        scale_inv_out = tl.fdiv(1.0, scale)
+        tl.store(scale_inv_ptr, scale_inv_out)
 
 # There is a Triton bug that makes this kernel produce incorrect result
 # Not in use for now

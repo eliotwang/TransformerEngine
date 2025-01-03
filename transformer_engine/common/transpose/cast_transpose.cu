@@ -17,6 +17,7 @@
 #include "../util/string.h"
 #include "../utils.cuh"
 
+#include <iostream>
 namespace transformer_engine {
 
 namespace {
@@ -103,14 +104,11 @@ struct KernelConfig {
 };
 
 template <size_t load_size, size_t store_size, typename IType, typename OType>
-__global__ void __launch_bounds__(block_size)
-    cast_transpose_general_kernel(const IType *__restrict__ const input,
-                                  const CType *__restrict__ const noop,
-                                  OType *__restrict__ const output_c,
-                                  OType *__restrict__ const output_t,
-                                  const CType *__restrict__ const scale_ptr,
-                                  CType *__restrict__ const amax_ptr, const size_t row_length,
-                                  const size_t num_rows) {
+__global__ void __launch_bounds__(block_size) cast_transpose_general_kernel(
+    const IType *__restrict__ const input, const CType *__restrict__ const noop,
+    OType *__restrict__ const output_c, OType *__restrict__ const output_t,
+    const CType *__restrict__ const scale_ptr, CType *__restrict__ const amax_ptr,
+    CType *__restrict__ const scale_inv_ptr, const size_t row_length, const size_t num_rows) {
   if (noop != nullptr && noop[0] == 1.0f) return;
 
   // Vectorized load/store sizes
@@ -209,8 +207,14 @@ __global__ void __launch_bounds__(block_size)
   if (amax_ptr != nullptr) {
     amax = reduce_max<warps_per_tile>(amax, tidy);
     if (threadIdx.x == 0) {
+      static_assert(std::is_same<CType, float>::value);
       atomicMaxFloat(amax_ptr, amax);
     }
+  }
+
+  // Update scale-inverse
+  if (blockIdx.x == 0 && threadIdx.x == 0 && scale_inv_ptr != nullptr) {
+    reciprocal<CType>(scale_inv_ptr, scale);
   }
 }
 
@@ -231,7 +235,7 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
     NVTE_CHECK(noop.data.dtype == DType::kFloat32);
     NVTE_CHECK(noop.data.dptr != nullptr);
   }
-  
+
   // Check tensor dims
   CheckInputTensor(input, "cast_transpose_input");
   CheckOutputTensor(cast_output, "cast_output");
@@ -257,7 +261,9 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
              "Cast and transposed outputs need to share amax tensor.");
   NVTE_CHECK(cast_output.scale.dptr == transposed_output.scale.dptr,
              "Cast and transposed outputs need to share scale tensor.");
-  
+  NVTE_CHECK(cast_output.scale_inv.dptr == transposed_output.scale_inv.dptr,
+             "Cast and transposed outputs need to share scale-inverse tensor.");
+
   TRANSFORMER_ENGINE_TYPE_SWITCH_INPUT(
       input.data.dtype, InputType,
       TRANSFORMER_ENGINE_TYPE_SWITCH_OUTPUT(
@@ -273,12 +279,12 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
           if (aligned && rtc::is_enabled()) {  // Runtime-compiled tuned kernel
             size_t load_size;
             size_t store_size;
-            size_t wpt_size;
-            size_t iter_size;
+            size_t wpt_size = warps_per_tile;
+            size_t iter_size = THREADS_PER_WARP / wpt_size;
             int num_blocks;
             size_t rtc_block_size;
-
             bool do_general_config = true;
+
 #ifdef __HIP_PLATFORM_AMD__            
             if((std::is_same<OutputType, fp8e5m2>::value) || (std::is_same<OutputType, fp8e4m3>::value)){
               do_general_config = false;
@@ -312,26 +318,20 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
                 load_size = 8,
                 store_size = 4;
               }else{
-                if(std::is_same<InputType, float>::value){
-                  load_size = 4,
-                  store_size = 4;
-                }else{
-                  load_size = 4,
-                  store_size = 2;
-                }
+                load_size = 4,
+                store_size = std::is_same<InputType, float>::value ? 4 : 2;
+              }
+              
+              const size_t row_tile_elements = load_size * THREADS_PER_WARP / itype_size;
+              const size_t col_tile_elements = store_size * iter_size * wpt_size / otype_size;
+              // Number of CUDA blocks
+              num_blocks = (row_length / row_tile_elements) * (num_rows / col_tile_elements);
+              rtc_block_size = THREADS_PER_WARP * wpt_size;  
+              do_general_config =!(row_length % row_tile_elements == 0 && num_rows % col_tile_elements == 0);
             }
-            const size_t row_tile_elements = load_size * THREADS_PER_WARP / itype_size;
-            const size_t col_tile_elements = store_size * iter_size * wpt_size / otype_size;
-            // Number of CUDA blocks
-            num_blocks = (row_length / row_tile_elements) * (num_rows / col_tile_elements);
-            rtc_block_size = THREADS_PER_WARP * wpt_size;  
-
-            do_general_config =!(row_length % row_tile_elements == 0 && num_rows % col_tile_elements == 0);
- 
-          }
 #endif         
             if(do_general_config){
-              // Pick kernel config
+            // Pick kernel config
               std::vector<KernelConfig> kernel_configs;
               kernel_configs.reserve(16);
               const size_t sm_count = static_cast<size_t>(cuda::sm_count());
@@ -365,35 +365,35 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
               iter_size = THREADS_PER_WARP / wpt_size;
               rtc_block_size = THREADS_PER_WARP * wpt_size;
             }
-            
+
             // Compile NVRTC kernel if needed and launch
             auto &rtc_manager = rtc::KernelManager::instance();
             const std::string kernel_label = concat_strings(
                 "cast_transpose"
                 ",itype=",
                 itype_name, ",otype=", otype_name, ",load_size=", load_size,
-                ",store_size=", store_size, ",wpt_size=", wpt_size, ",iter_size=",iter_size);
+                ",store_size=", store_size, ",wpt_size=", wpt_size, ",iter_size=", iter_size);
             if (!rtc_manager.is_compiled(kernel_label)) {
               std::string code = string_code_transpose_rtc_cast_transpose_cu;
               code = regex_replace(code, "__ITYPE__", itype_name);
               code = regex_replace(code, "__OTYPE__", otype_name);
               code = regex_replace(code, "__LOAD_SIZE__", load_size);
               code = regex_replace(code, "__STORE_SIZE__", store_size);
-              code = regex_replace(code, "__ITER_SIZE__", iter_size);
               code = regex_replace(code, "__WARPS_PER_TILE__", wpt_size);
+              code = regex_replace(code, "__ITER_SIZE__", iter_size);
               code = regex_replace(code, "__BLOCK_SIZE__", rtc_block_size);
               rtc_manager.compile(kernel_label, "cast_transpose_optimized_kernel", code,
                                   "transformer_engine/common/transpose/rtc/cast_transpose.cu");
             }
-
             rtc_manager.launch(kernel_label, num_blocks, rtc_block_size, 0, stream,
-                            static_cast<const InputType *>(input.data.dptr),
-                            reinterpret_cast<const CType *>(noop.data.dptr),
-                            static_cast<OutputType *>(cast_output.data.dptr),
-                            static_cast<OutputType *>(transposed_output.data.dptr),
-                            static_cast<const CType *>(cast_output.scale.dptr),
-                            static_cast<CType *>(cast_output.amax.dptr), row_length, num_rows);
-
+                               static_cast<const InputType *>(input.data.dptr),
+                               reinterpret_cast<const CType *>(noop.data.dptr),
+                               static_cast<OutputType *>(cast_output.data.dptr),
+                               static_cast<OutputType *>(transposed_output.data.dptr),
+                               static_cast<const CType *>(cast_output.scale.dptr),
+                               static_cast<CType *>(cast_output.amax.dptr),
+                               static_cast<CType *>(cast_output.scale_inv.dptr), row_length,
+                               num_rows);
           } else {  // Statically-compiled general kernel
             constexpr size_t load_size = 4;
             constexpr size_t store_size = 4;
@@ -408,7 +408,8 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
                     static_cast<OutputType *>(cast_output.data.dptr),
                     static_cast<OutputType *>(transposed_output.data.dptr),
                     static_cast<const CType *>(cast_output.scale.dptr),
-                    static_cast<CType *>(cast_output.amax.dptr), row_length, num_rows);
+                    static_cast<CType *>(cast_output.amax.dptr),
+                    static_cast<CType *>(cast_output.scale_inv.dptr), row_length, num_rows);
           });  // NOLINT(*)
   );           // NOLINT(*)
 }

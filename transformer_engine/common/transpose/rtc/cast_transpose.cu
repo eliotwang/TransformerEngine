@@ -94,7 +94,6 @@ __global__ void __launch_bounds__(block_size) cast_transpose_optimized_kernel(
   }
 
   // Copy from registers to shared memory to global memory
-  //__shared__ OVecT shared_output_t[THREADS_PER_WARP][THREADS_PER_WARP + 1];
   __shared__ OVecT shared_output_t[THREADS_PER_WARP][warps_per_tile*iter_size + 1];
 #pragma unroll
   for (size_t j2 = 0; j2 < nvec_in; ++j2) {
@@ -106,12 +105,11 @@ __global__ void __launch_bounds__(block_size) cast_transpose_optimized_kernel(
     }
     __syncthreads();
 #pragma unroll
-    for (size_t iter = 0; iter < (THREADS_PER_WARP / warps_per_tile); ++iter) {
+    for (size_t iter = 0; iter < num_iterations; ++iter) {
       const size_t i1 = tidx;
       const size_t j1 = tidy + iter * bdimy;
       const size_t row = tile_row + i1 * nvec_out;
       const size_t col = tile_col + j1 * nvec_in + j2;
-      
       if(tidx < warps_per_tile * iter_size)
         shared_output_t[j1][i1].store_to(&output_t[col * num_rows + row]);
     }

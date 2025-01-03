@@ -193,7 +193,7 @@ def te_cast_transpose_dbias_triton(input, input_scale, amax_out, scale_inv_out, 
     dbias_out = torch.empty(N, dtype=input.dtype, device='cuda')
 
     if M == 0 or N == 0:
-        return dbias_out, cast_out, trans_out
+        return dbias_out.zero_(), cast_out, trans_out
 
     MIN_BLOCK_M = 64 ## This needs to be changed if minimum block size m changed
     partial_dbias = torch.empty(triton.cdiv(M, MIN_BLOCK_M), N, dtype=torch.float32, device='cuda')

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+# License for AMD contributions = MIT. See LICENSE for more information
+
 import torch
 
 import transformer_engine_torch as tex
@@ -209,8 +212,6 @@ def te_cast_transpose_dbias_triton(input, input_scale, amax_out, scale_inv_out, 
     best_config = _transpose_triton_dbias.best_config
     block_m_1 = int(best_config.kwargs['BLOCK_M'])
 
-    grid2 = lambda META: (triton.cdiv(N, META['BLOCK_N']),)
-    #_reduce_bias_triton[grid2](partial_dbias, dbias_out, partial_dbias.stride(0), partial_dbias.stride(1), triton.cdiv(M, block_m_1), N)
     dbias_out = reduce_dbias_kernel(partial_dbias[0:triton.cdiv(M, block_m_1)], input.dtype)
     return dbias_out, cast_out, trans_out
 

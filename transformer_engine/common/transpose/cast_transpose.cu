@@ -17,6 +17,7 @@
 #include "../util/string.h"
 #include "../utils.cuh"
 
+#include <iostream>
 namespace transformer_engine {
 
 namespace {
@@ -103,14 +104,11 @@ struct KernelConfig {
 };
 
 template <size_t load_size, size_t store_size, typename IType, typename OType>
-__global__ void __launch_bounds__(block_size)
-    cast_transpose_general_kernel(const IType *__restrict__ const input,
-                                  const CType *__restrict__ const noop,
-                                  OType *__restrict__ const output_c,
-                                  OType *__restrict__ const output_t,
-                                  const CType *__restrict__ const scale_ptr,
-                                  CType *__restrict__ const amax_ptr, const size_t row_length,
-                                  const size_t num_rows) {
+__global__ void __launch_bounds__(block_size) cast_transpose_general_kernel(
+    const IType *__restrict__ const input, const CType *__restrict__ const noop,
+    OType *__restrict__ const output_c, OType *__restrict__ const output_t,
+    const CType *__restrict__ const scale_ptr, CType *__restrict__ const amax_ptr,
+    CType *__restrict__ const scale_inv_ptr, const size_t row_length, const size_t num_rows) {
   if (noop != nullptr && noop[0] == 1.0f) return;
 
   // Vectorized load/store sizes
@@ -209,8 +207,14 @@ __global__ void __launch_bounds__(block_size)
   if (amax_ptr != nullptr) {
     amax = reduce_max<warps_per_tile>(amax, tidy);
     if (threadIdx.x == 0) {
+      static_assert(std::is_same<CType, float>::value);
       atomicMaxFloat(amax_ptr, amax);
     }
+  }
+
+  // Update scale-inverse
+  if (blockIdx.x == 0 && threadIdx.x == 0 && scale_inv_ptr != nullptr) {
+    reciprocal<CType>(scale_inv_ptr, scale);
   }
 }
 
@@ -257,6 +261,8 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
              "Cast and transposed outputs need to share amax tensor.");
   NVTE_CHECK(cast_output.scale.dptr == transposed_output.scale.dptr,
              "Cast and transposed outputs need to share scale tensor.");
+  NVTE_CHECK(cast_output.scale_inv.dptr == transposed_output.scale_inv.dptr,
+             "Cast and transposed outputs need to share scale-inverse tensor.");
 
   TRANSFORMER_ENGINE_TYPE_SWITCH_INPUT(
       input.data.dtype, InputType,
@@ -271,36 +277,94 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
           const bool aligned =
               (row_length % THREADS_PER_WARP == 0 && num_rows % THREADS_PER_WARP == 0);
           if (aligned && rtc::is_enabled()) {  // Runtime-compiled tuned kernel
+            size_t load_size;
+            size_t store_size;
+            size_t wpt_size = warps_per_tile;
+            size_t iter_size = THREADS_PER_WARP / wpt_size;
+            int num_blocks;
+            size_t rtc_block_size;
+            bool do_general_config = true;
+
+#ifdef __HIP_PLATFORM_AMD__            
+            if((std::is_same<OutputType, fp8e5m2>::value) || (std::is_same<OutputType, fp8e4m3>::value)){
+              do_general_config = false;
+               // Estimate number of SMs
+              // Note: H100 has 132 SMs, A100 has 108 SMs.
+              // Note: Directly querying number of SMs with cudaGetDeviceProperties is
+              // slow (>1 ms). Consider querying once and caching.
+              const int n_sms = 128;
+              // Helper functions to get kernel configuration
+              auto get_n_tiles = [=] (size_t load_size, size_t store_size) -> int {
+                constexpr size_t threads_per_warp = static_cast<size_t>(THREADS_PER_WARP);
+                size_t nvec_in = load_size / sizeof(InputType);
+                size_t nvec_out = store_size / sizeof(OutputType);
+                size_t n_tiles = DIVUP(row_length, nvec_in * threads_per_warp) *
+                                DIVUP(num_rows, nvec_out * threads_per_warp);
+              return n_tiles;
+              };
+              auto get_n_blocks = [=] (size_t n_tiles, size_t cast_transpose_num_threads, size_t wpt_size) -> int {
+                size_t n_warps_per_block = cast_transpose_num_threads / THREADS_PER_WARP;
+                size_t n_blocks = DIVUP(n_tiles * wpt_size, n_warps_per_block);
+              return n_blocks;
+              }; 
+
+              wpt_size = 8;
+              iter_size = THREADS_PER_WARP / wpt_size;
+              const size_t estimated_n_tiles = get_n_tiles(8, 4);
+              unsigned int cast_transpose_num_threads = wpt_size * THREADS_PER_WARP;
+              const size_t estimated_n_blocks = get_n_blocks(estimated_n_tiles, cast_transpose_num_threads, wpt_size);
+          
+              if(estimated_n_blocks >= n_sms) {
+                load_size = 8,
+                store_size = 4;
+              }else{
+                load_size = 4,
+                store_size = std::is_same<InputType, float>::value ? 4 : 2;
+              }
+              
+              const size_t row_tile_elements = load_size * THREADS_PER_WARP / itype_size;
+              const size_t col_tile_elements = store_size * iter_size * wpt_size / otype_size;
+              // Number of CUDA blocks
+              num_blocks = (row_length / row_tile_elements) * (num_rows / col_tile_elements);
+              rtc_block_size = THREADS_PER_WARP * wpt_size;  
+              do_general_config =!(row_length % row_tile_elements == 0 && num_rows % col_tile_elements == 0);
+            }
+#endif         
+            if(do_general_config){
             // Pick kernel config
-            std::vector<KernelConfig> kernel_configs;
-            kernel_configs.reserve(16);
-            const size_t sm_count = static_cast<size_t>(cuda::sm_count());
-            auto add_config = [&](size_t load_size, size_t store_size) {
-              kernel_configs.emplace_back(row_length, num_rows, itype_size, otype_size, load_size,
-                                          store_size, sm_count);
-            };
-            add_config(8, 8);
-            add_config(4, 8);
-            add_config(8, 4);
-            add_config(4, 4);
-            add_config(2, 8);
-            add_config(8, 2);
-            add_config(2, 4);
-            add_config(4, 2);
-            add_config(2, 2);
-            add_config(1, 8);
-            add_config(8, 1);
-            add_config(1, 4);
-            add_config(4, 1);
-            add_config(1, 2);
-            add_config(2, 1);
-            add_config(1, 1);
-            const auto &kernel_config =
-                *std::min_element(kernel_configs.begin(), kernel_configs.end());
-            NVTE_CHECK(kernel_config.valid, "invalid kernel config");
-            const size_t load_size = kernel_config.load_size;
-            const size_t store_size = kernel_config.store_size;
-            const size_t num_blocks = kernel_config.num_blocks;
+              std::vector<KernelConfig> kernel_configs;
+              kernel_configs.reserve(16);
+              const size_t sm_count = static_cast<size_t>(cuda::sm_count());
+              auto add_config = [&](size_t load_size, size_t store_size) {
+                kernel_configs.emplace_back(row_length, num_rows, itype_size, otype_size, load_size,
+                                            store_size, sm_count);
+              };
+              add_config(8, 8);
+              add_config(4, 8);
+              add_config(8, 4);
+              add_config(4, 4);
+              add_config(2, 8);
+              add_config(8, 2);
+              add_config(2, 4);
+              add_config(4, 2);
+              add_config(2, 2);
+              add_config(1, 8);
+              add_config(8, 1);
+              add_config(1, 4);
+              add_config(4, 1);
+              add_config(1, 2);
+              add_config(2, 1);
+              add_config(1, 1);
+              const auto &kernel_config =
+                  *std::min_element(kernel_configs.begin(), kernel_configs.end());
+              NVTE_CHECK(kernel_config.valid, "invalid kernel config");
+              load_size = kernel_config.load_size;
+              store_size = kernel_config.store_size;
+              num_blocks = kernel_config.num_blocks;
+              wpt_size = warps_per_tile;
+              iter_size = THREADS_PER_WARP / wpt_size;
+              rtc_block_size = THREADS_PER_WARP * wpt_size;
+            }
 
             // Compile NVRTC kernel if needed and launch
             auto &rtc_manager = rtc::KernelManager::instance();
@@ -308,25 +372,28 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
                 "cast_transpose"
                 ",itype=",
                 itype_name, ",otype=", otype_name, ",load_size=", load_size,
-                ",store_size=", store_size);
+                ",store_size=", store_size, ",wpt_size=", wpt_size, ",iter_size=", iter_size);
             if (!rtc_manager.is_compiled(kernel_label)) {
               std::string code = string_code_transpose_rtc_cast_transpose_cu;
               code = regex_replace(code, "__ITYPE__", itype_name);
               code = regex_replace(code, "__OTYPE__", otype_name);
               code = regex_replace(code, "__LOAD_SIZE__", load_size);
               code = regex_replace(code, "__STORE_SIZE__", store_size);
-              code = regex_replace(code, "__WARPS_PER_TILE__", warps_per_tile);
-              code = regex_replace(code, "__BLOCK_SIZE__", block_size);
+              code = regex_replace(code, "__WARPS_PER_TILE__", wpt_size);
+              code = regex_replace(code, "__ITER_SIZE__", iter_size);
+              code = regex_replace(code, "__BLOCK_SIZE__", rtc_block_size);
               rtc_manager.compile(kernel_label, "cast_transpose_optimized_kernel", code,
                                   "transformer_engine/common/transpose/rtc/cast_transpose.cu");
             }
-            rtc_manager.launch(kernel_label, num_blocks, block_size, 0, stream,
+            rtc_manager.launch(kernel_label, num_blocks, rtc_block_size, 0, stream,
                                static_cast<const InputType *>(input.data.dptr),
                                reinterpret_cast<const CType *>(noop.data.dptr),
                                static_cast<OutputType *>(cast_output.data.dptr),
                                static_cast<OutputType *>(transposed_output.data.dptr),
                                static_cast<const CType *>(cast_output.scale.dptr),
-                               static_cast<CType *>(cast_output.amax.dptr), row_length, num_rows);
+                               static_cast<CType *>(cast_output.amax.dptr),
+                               static_cast<CType *>(cast_output.scale_inv.dptr), row_length,
+                               num_rows);
           } else {  // Statically-compiled general kernel
             constexpr size_t load_size = 4;
             constexpr size_t store_size = 4;
@@ -341,7 +408,8 @@ void cast_transpose(const Tensor &input, const Tensor &noop, Tensor *cast_output
                     static_cast<OutputType *>(cast_output.data.dptr),
                     static_cast<OutputType *>(transposed_output.data.dptr),
                     static_cast<const CType *>(cast_output.scale.dptr),
-                    static_cast<CType *>(cast_output.amax.dptr), row_length, num_rows);
+                    static_cast<CType *>(cast_output.amax.dptr),
+                    static_cast<CType *>(cast_output.scale_inv.dptr), row_length, num_rows);
           });  // NOLINT(*)
   );           // NOLINT(*)
 }

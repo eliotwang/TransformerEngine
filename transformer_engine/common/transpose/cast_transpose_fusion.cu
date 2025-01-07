@@ -439,14 +439,18 @@ __global__ void __launch_bounds__(cast_transpose_num_threads)
     }
   }
 
-  /* warp tile amax reduce*/
-  amax = reduce_max<cast_transpose_num_threads / THREADS_PER_WARP>(amax, warp_id);
-
-  if (threadIdx.x == 0) {
-    static_assert(std::is_same<CType, float>::value);
-    if (param.amax != nullptr) {
+  // Reduce amax over block
+  if (param.amax != nullptr) {
+    amax = reduce_max<cast_transpose_num_threads / THREADS_PER_WARP>(amax, warp_id);
+    if (threadIdx.x == 0) {
+      static_assert(std::is_same<CType, float>::value);
       atomicMaxFloat(param.amax, amax);
     }
+  }
+
+  // Update scale-inverse
+  if (blockIdx.x == 0 && threadIdx.x == 0 && param.scale_inv != nullptr) {
+    reciprocal<CType>(param.scale_inv, scale);
   }
 }
 
@@ -550,38 +554,82 @@ void cast_transpose_fused(const Tensor &input, const Tensor &act_input, Tensor *
           size_t num_blocks;
 
           if (jit_compiled) {
-            // Pick kernel config
-            std::vector<KernelConfig> kernel_configs;
-            kernel_configs.reserve(16);
-            const size_t sm_count = static_cast<size_t>(cuda::sm_count());
-            auto add_config = [&](size_t load_size_config, size_t store_size_config) {
-              kernel_configs.emplace_back(row_length, num_rows, itype_size, itype2_size, otype_size,
-                                          load_size_config, store_size_config, sm_count, IS_DACT);
-            };
-            add_config(8, 8);
-            add_config(4, 8);
-            add_config(8, 4);
-            add_config(4, 4);
-            add_config(2, 8);
-            add_config(8, 2);
-            add_config(2, 4);
-            add_config(4, 2);
-            add_config(2, 2);
-            add_config(1, 8);
-            add_config(8, 1);
-            add_config(1, 4);
-            add_config(4, 1);
-            add_config(1, 2);
-            add_config(2, 1);
-            add_config(1, 1);
+            bool do_general_config = true;
+#ifdef __HIP_PLATFORM_AMD__            
+            if((std::is_same<OutputType, fp8e5m2>::value) || (std::is_same<OutputType, fp8e4m3>::value)){
+              //std::cout << "OutputType FP8" << std::endl;
+              do_general_config = false;
+              const int n_sms = 128;
+              // Helper functions to get kernel configuration
+              auto get_n_tiles = [=] (size_t load_size, size_t store_size) -> int {
+                //constexpr size_t threads_per_warp = static_cast<size_t>(THREADS_PER_WARP);
+                size_t nvec_in = load_size / sizeof(InputType);
+                size_t nvec_out = store_size / sizeof(OutputType);
+                size_t n_tiles = DIVUP(row_length, nvec_in * threads_per_warp) *
+                                DIVUP(num_rows, nvec_out * threads_per_warp);
+              return n_tiles;
+              };
+              auto get_n_blocks = [=] (size_t n_tiles, size_t cast_transpose_num_threads, size_t n_warps_per_tile) -> int {
+                size_t n_warps_per_block = cast_transpose_num_threads / threads_per_warp;
+                size_t n_blocks = DIVUP(n_tiles * n_warps_per_tile, n_warps_per_block);
+              return n_blocks;
+              }; 
 
-            // Select the kernel configuration with the lowest cost
-            const auto &kernel_config =
-                *std::min_element(kernel_configs.begin(), kernel_configs.end());
-            NVTE_CHECK(kernel_config.valid, "invalid kernel config");
-            load_size = kernel_config.load_size;
-            store_size = kernel_config.store_size;
-            num_blocks = kernel_config.num_blocks;
+              const size_t estimated_n_tiles = get_n_tiles(8, 4);
+              unsigned int cast_transpose_num_threads = n_warps_per_tile * threads_per_warp;
+              const size_t estimated_n_blocks = get_n_blocks(estimated_n_tiles, cast_transpose_num_threads, n_warps_per_tile);
+        
+              if constexpr (!IS_DACT) {
+                if(estimated_n_blocks >= n_sms) {
+                    load_size = 8;
+                    store_size = 4;
+                }else{
+                    load_size = 4;
+                    store_size = std::is_same<InputType, float>::value ? 4 : 2;
+                }
+              }
+            const size_t iter_size = threads_per_warp / n_warps_per_tile; 
+            const size_t row_tile_elements = load_size * threads_per_warp / itype_size;
+            const size_t col_tile_elements = store_size * iter_size * n_warps_per_tile / otype_size;
+            // Number of CUDA blocks
+            num_blocks = (row_length / row_tile_elements) * (num_rows / col_tile_elements);
+            do_general_config =!(row_length % row_tile_elements == 0 && num_rows % col_tile_elements == 0);
+          }
+#endif         
+            if(do_general_config){
+            // Pick kernel config
+              std::vector<KernelConfig> kernel_configs;
+              kernel_configs.reserve(16);
+              const size_t sm_count = static_cast<size_t>(cuda::sm_count());
+              auto add_config = [&](size_t load_size_config, size_t store_size_config) {
+                kernel_configs.emplace_back(row_length, num_rows, itype_size, itype2_size, otype_size,
+                                            load_size_config, store_size_config, sm_count, IS_DACT);
+              };
+              add_config(8, 8);
+              add_config(4, 8);
+              add_config(8, 4);
+              add_config(4, 4);
+              add_config(2, 8);
+              add_config(8, 2);
+              add_config(2, 4);
+              add_config(4, 2);
+              add_config(2, 2);
+              add_config(1, 8);
+              add_config(8, 1);
+              add_config(1, 4);
+              add_config(4, 1);
+              add_config(1, 2);
+              add_config(2, 1);
+              add_config(1, 1);
+
+              // Select the kernel configuration with the lowest cost
+              const auto &kernel_config =
+                  *std::min_element(kernel_configs.begin(), kernel_configs.end());
+              NVTE_CHECK(kernel_config.valid, "invalid kernel config");
+              load_size = kernel_config.load_size;
+              store_size = kernel_config.store_size;
+              num_blocks = kernel_config.num_blocks;
+            }
           }
 
           const size_t nvec_in = load_size / itype_size;
@@ -890,17 +938,18 @@ __global__ void __launch_bounds__(cast_transpose_num_threads)
     __syncthreads();
   }
 
-  /* warp tile amax reduce*/
-  max = reduce_max<cast_transpose_num_threads / THREADS_PER_WARP>(max, warp_id);
-
-  if (threadIdx.x == 0) {
-    static_assert(std::is_same<CType, float>::value);
-    if (amax != nullptr) {
+  // Reduce amax over block
+  if (amax != nullptr) {
+    max = reduce_max<cast_transpose_num_threads / THREADS_PER_WARP>(max, warp_id);
+    if (threadIdx.x == 0) {
+      static_assert(std::is_same<CType, float>::value);
       atomicMaxFloat(amax, max);
     }
-    if (scale_inv != nullptr) {
-      reciprocal<float>(scale_inv, scale);
-    }
+  }
+
+  // Update scale-inverse
+  if (blockIdx.x == 0 && threadIdx.x == 0 && scale_inv != nullptr) {
+    reciprocal<CType>(scale_inv, scale);
   }
 }
 
@@ -1099,17 +1148,18 @@ __global__ void __launch_bounds__(cast_transpose_num_threads)
     __syncthreads();
   }
 
-  /* warp tile amax reduce*/
-  max = reduce_max<cast_transpose_num_threads / THREADS_PER_WARP>(max, warp_id);
-
-  if (threadIdx.x == 0) {
-    static_assert(std::is_same<CType, float>::value);
-    if (amax != nullptr) {
+  // Reduce amax over block
+  if (amax != nullptr) {
+    max = reduce_max<cast_transpose_num_threads / THREADS_PER_WARP>(max, warp_id);
+    if (threadIdx.x == 0) {
+      static_assert(std::is_same<CType, float>::value);
       atomicMaxFloat(amax, max);
     }
-    if (scale_inv != nullptr) {
-      reciprocal<float>(scale_inv, scale);
-    }
+  }
+
+  // Update scale-inverse
+  if (blockIdx.x == 0 && threadIdx.x == 0 && scale_inv != nullptr) {
+    reciprocal<CType>(scale_inv, scale);
   }
 }
 

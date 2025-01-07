@@ -195,42 +195,42 @@ void populate_cast_transpose_dbias_workspace_config(const Tensor &cast_output, /
   workspace->data.dtype = DType::kFloat32;
 }
 
-template <int nvec, typename ComputeType, typename OutputType>
-__global__ void __launch_bounds__(reduce_dbias_num_threads)
-    reduce_dbias_kernel(OutputType *const dbias_output, const ComputeType *const dbias_partial,
-                        const int row_length, const int num_rows) {
-  using ComputeVec = Vec<ComputeType, nvec>;
-  using OutputVec = Vec<OutputType, nvec>;
+template <typename ComputeType, typename OutputType>
+__global__ void reduce_dbias_kernel(OutputType *const dbias_output, const ComputeType *const dbias_partial, const int row_length, const int thread_num_rows, const int num_rows) {
 
-  const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+  const int col = blockIdx.x * blockDim.x + threadIdx.x;
+  const int warps_id_y = threadIdx.y;
 
-  if (thread_id * nvec >= row_length) {
+  if (col >= row_length) {
     return;
   }
 
-  const ComputeType *const thread_in_base = dbias_partial + thread_id * nvec;
-  OutputType *const thread_out_base = dbias_output + thread_id * nvec;
+  const ComputeType *const thread_in_base = dbias_partial + warps_id_y * thread_num_rows * row_length + col;
 
-  const int stride_in_vec = row_length / nvec;
+  ComputeType ldg = 0.0f, acc = 0.0f;
 
-  ComputeVec ldg_vec;
-  ComputeVec acc_vec;
-  acc_vec.clear();
-  for (int i = 0; i < num_rows; ++i) {
-    ldg_vec.load_from(thread_in_base, i * stride_in_vec);
-#pragma unroll
-    for (int e = 0; e < nvec; ++e) {
-      acc_vec.data.elt[e] += ldg_vec.data.elt[e];
+  int valid_num_rows = (num_rows - warps_id_y * thread_num_rows) > thread_num_rows ? thread_num_rows : max(((num_rows - warps_id_y * thread_num_rows)), 0);
+
+
+  for (int i = 0; i < valid_num_rows; ++i) {
+    ldg = thread_in_base[i * row_length];
+    acc += ldg;
+  }
+
+  extern __shared__ ComputeType sdata[];
+  sdata[threadIdx.y * blockDim.x + threadIdx.x] = acc;
+  __syncthreads();
+  
+  if(threadIdx.y == 0 && col < row_length)
+  {
+    acc = 0;
+    for (int j = 0; j < blockDim.y; j++) {
+      acc += sdata[j * blockDim.x + threadIdx.x];
     }
+    dbias_output[col] = OutputType(acc);
   }
-
-  OutputVec stg_vec;
-#pragma unroll
-  for (int e = 0; e < nvec; ++e) {
-    stg_vec.data.elt[e] = OutputType(acc_vec.data.elt[e]);
-  }
-  stg_vec.store_to(thread_out_base, 0);
 }
+
 
 template <typename InputType>
 void reduce_dbias(const Tensor &workspace, Tensor *dbias, const size_t row_length,
@@ -243,15 +243,23 @@ void reduce_dbias(const Tensor &workspace, Tensor *dbias, const size_t row_lengt
   const size_t reduce_dbias_row_length = row_length;
   const size_t reduce_dbias_num_rows =
       DIVUP(num_rows, static_cast<size_t>(nvec_out * THREADS_PER_WARP));
-  const size_t reduce_dbias_num_blocks =
-      DIVUP(row_length, reduce_dbias_num_threads * reduce_dbias_nvec);
+  const size_t reduce_dbias_num_blocks = DIVUP(row_length, static_cast<size_t>(THREADS_PER_WARP));
 
+  size_t  warps_num = min(reduce_dbias_num_rows, 32);
+
+  dim3 block(THREADS_PER_WARP, warps_num, 1);
+  dim3 grid(reduce_dbias_num_blocks, 1);
+
+  size_t thread_num_rows = DIVUP(reduce_dbias_num_rows, warps_num);
   using DbiasOutputType = fp32;
-  reduce_dbias_kernel<reduce_dbias_nvec, DbiasOutputType, InputType>
-      <<<reduce_dbias_num_blocks, reduce_dbias_num_threads, 0, stream>>>(
-          reinterpret_cast<InputType *>(dbias->data.dptr),
-          reinterpret_cast<const fp32 *>(workspace.data.dptr), reduce_dbias_row_length,
-          reduce_dbias_num_rows);
+
+  const int sharedMemSize = THREADS_PER_WARP * sizeof(DbiasOutputType) * warps_num;
+
+  reduce_dbias_kernel<DbiasOutputType, InputType>
+        <<<grid, block, sharedMemSize, stream>>>(
+            reinterpret_cast<InputType *>(dbias->data.dptr),
+            reinterpret_cast<const fp32 *>(workspace.data.dptr), reduce_dbias_row_length,
+            thread_num_rows, reduce_dbias_num_rows);
 }
 
 template <bool IS_DBIAS, bool IS_DACT, typename ComputeType, typename Param, int nvec_in,
